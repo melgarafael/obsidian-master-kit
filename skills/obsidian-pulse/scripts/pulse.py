@@ -33,11 +33,12 @@ from core.paths import resolve_vault  # noqa: E402
 
 
 WAVE_PLAN = {
-    "refresh": 2,
     "serve": 6,
     "daemon": 6,
-    # `status` ja implementado na Wave 1 (stdlib DB queries)
+    # `refresh` ja wired (Wave 2); `status` ja implementado na Wave 1
 }
+
+_WORKER_PATH = pathlib.Path(__file__).parent / "worker.py"
 
 
 def _emit(payload: dict[str, Any]) -> None:
@@ -70,13 +71,10 @@ def _load_by_path(module_name: str, file_path: pathlib.Path):
 def cmd_refresh(args) -> int:
     vault = resolve_vault(args.vault)
     conn = connect(vault)
+    worker = _load_by_path("_pulse_worker", _WORKER_PATH)
+    result = worker.run_batch_analytics(conn)
     payload = _base("refresh", vault, conn, args)
-    payload.update({
-        "wave_pending": True,
-        "planned_for_wave": WAVE_PLAN["refresh"],
-        "stages": [],
-        "note": "Stub Wave 1 — logica real em Wave 2 (worker batch analytics).",
-    })
+    payload.update(result)
     _emit(payload)
     return 0
 

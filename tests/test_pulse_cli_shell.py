@@ -60,12 +60,14 @@ def test_without_subcommand_fails(pulse):
     assert exc.value.code == 2
 
 
-def test_refresh_stub_envelope(pulse, initialized_vault, capsys):
+def test_refresh_roda_stages(pulse, initialized_vault, capsys):
     rc, p = _run(pulse, ["refresh", "--vault", str(initialized_vault)], capsys)
     assert rc == 0
     assert p["command"] == "refresh"
-    assert p["wave_pending"] is True
-    assert p["planned_for_wave"] == 2
+    assert "stages" in p
+    stage_labels = {s["stage"] for s in p["stages"]}
+    assert {"fsrs", "anomaly", "ranking"}.issubset(stage_labels)
+    assert p["total_duration_ms"] >= 0
 
 
 def test_serve_stub_default_port(pulse, initialized_vault, capsys):
