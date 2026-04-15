@@ -3,10 +3,20 @@
 .vscode/
 *.log
 
-# Python bytecode (scripts/)
+# Python bytecode (scripts/ + core/ + skills/)
 __pycache__/
 *.pyc
 *.pyo
+
+# Testes/coverage artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Builds Python
+*.egg-info/
+build/
+dist/
 
 # Ambientes virtuais locais eventuais
 .venv/
