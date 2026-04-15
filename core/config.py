@@ -59,3 +59,17 @@ SUGGESTIONS_PER_RUN_MAX: int = int(os.getenv("OBM_SUGGESTIONS_PER_RUN_MAX", "20"
 
 # TTL do cache de sugestoes (em dias). Worker do pulse vai regravar.
 SUGGESTIONS_TTL_DAYS: int = int(os.getenv("OBM_SUGGESTIONS_TTL_DAYS", "7"))
+
+# --- Organizer: detection thresholds (Epic 04) ---
+
+# Threshold pra duplicate_candidates. BRIEF original listava 0.92 ancorado
+# em MiniLM-L12 fallback; Model2Vec static comprime escala em pt-br
+# esoterico e 0.92 nunca dispara. 0.70 e o floor empirico default.
+# Rafael calibra via env OBM_DUPLICATE_MIN_COS na vault real.
+DUPLICATE_MIN_COS: float = float(os.getenv("OBM_DUPLICATE_MIN_COS", "0.70"))
+
+# Minimo de notas num cluster pra considerar que faltou MOC. BRIEF §6 fixa 10.
+MOC_AUDIT_MIN_CLUSTER_NOTES: int = int(os.getenv("OBM_MOC_AUDIT_MIN_CLUSTER_NOTES", "10"))
+
+# KNN K pra varredura de duplicatas. K alto e mais abrangente mas custoso.
+DUPLICATE_SCAN_K: int = int(os.getenv("OBM_DUPLICATE_SCAN_K", "10"))
