@@ -1,0 +1,22 @@
+{
+  "name": "obsidian-master-kit",
+  "version": "0.1.0-mvp",
+  "description": "Kit de skills que transforma uma pasta vazia num vault Obsidian profissional — segundo cérebro + memória persistente para IA. Inclui bootstrap guiado em pt-br, bibliotecário que cura cada escrita no vault e roadmap de skills futuras.",
+  "author": {
+    "name": "Rafael Melgaco",
+    "email": "rafael@maudibrasil.com.br",
+    "url": "https://github.com/rafaelmelgaco"
+  },
+  "homepage": "https://github.com/rafaelmelgaco/obsidian-master-kit",
+  "repository": "https://github.com/rafaelmelgaco/obsidian-master-kit",
+  "license": "MIT",
+  "keywords": [
+    "obsidian",
+    "second-brain",
+    "knowledge-management",
+    "ai-memory",
+    "pt-br",
+    "markdown",
+    "zettelkasten"
+  ]
+}

@@ -1,0 +1,19 @@
+.DS_Store
+.idea/
+.vscode/
+*.log
+
+# Python bytecode (scripts/)
+__pycache__/
+*.pyc
+*.pyo
+
+# Ambientes virtuais locais eventuais
+.venv/
+venv/
+
+# Saida de testes do scaffold
+/tmp-vault-test/
+
+# Metadados de execucao (epic-executor, tasks etc.)
+.epic-executor/
