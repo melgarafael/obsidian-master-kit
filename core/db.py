@@ -29,6 +29,15 @@ _VEC_TABLE_SQL = (
 )
 
 
+class _ObsidianMasterConnection(sqlite3.Connection):
+    """Subclasse de sqlite3.Connection que permite atributos customizados.
+
+    CPython's `sqlite3.Connection` bloqueia `setattr` em atributos novos por
+    nao ter `__dict__`. Como o plano especifica `conn.vec_loaded`, usamos
+    uma subclasse que reabre `__dict__`.
+    """
+
+
 def _now_iso() -> str:
     """Timestamp ISO-8601 em UTC, segundos de precisao."""
     return _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0).isoformat()
@@ -153,11 +162,11 @@ def connect(vault_path: pathlib.Path) -> sqlite3.Connection:
     kit_dir.mkdir(parents=True, exist_ok=True)
     db_path = kit_dir / "db.sqlite"
 
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), factory=_ObsidianMasterConnection)
     _apply_pragmas(conn)
 
     vec_loaded = _load_sqlite_vec(conn)
-    setattr(conn, "vec_loaded", vec_loaded)
+    conn.vec_loaded = vec_loaded  # type: ignore[attr-defined]
 
     ensure_schema(conn)
     return conn
