@@ -992,13 +992,294 @@ def cmd_approve(args) -> int:
     return 0
 
 
-def _stub(wave: int, cmd: str):
-    """Gera um handler stub pra subcommand nao implementado ainda."""
-    def handler(args) -> int:
-        print(f"Subcommand '{cmd}' ainda nao implementado (planejado pra Wave {wave}).",
-              file=sys.stderr)
-        return 2
-    return handler
+# ---------------------------------------------------------------------------
+# Wave 6: apply + rollback
+# ---------------------------------------------------------------------------
+def cmd_apply(args) -> int:
+    vault = pathlib.Path(args.vault).expanduser().resolve()
+    db_path = vault / ".obsidian-master" / "db.sqlite"
+    if not db_path.exists():
+        print("Erro: DB nao existe.", file=sys.stderr)
+        return 1
+    from core.db import connect
+    conn = connect(vault)
+
+    # Check prior batches
+    if args.batch == "all":
+        batches = sorted({r[0] for r in conn.execute(
+            "SELECT DISTINCT batch_id FROM migration_plan WHERE status='approved'"
+        ).fetchall()})
+        if not batches:
+            print("Nenhum batch com itens approved.")
+            return 0
+    else:
+        try:
+            b = int(args.batch)
+        except ValueError:
+            print("Erro: --batch deve ser int ou 'all'", file=sys.stderr)
+            return 1
+        # Enforce order: earlier batches must be fully applied or rolled_back
+        earlier_pending = conn.execute(
+            "SELECT COUNT(*) FROM migration_plan "
+            "WHERE batch_id < ? AND status='approved'",
+            (b,),
+        ).fetchone()[0]
+        if earlier_pending > 0:
+            print(f"Erro: batch(es) anteriores ainda tem {earlier_pending} items "
+                  f"'approved' nao aplicados. Aplique em ordem.", file=sys.stderr)
+            return 1
+        batches = [b]
+
+    total_applied = 0
+    for batch_id in batches:
+        n = _apply_batch(conn, vault, batch_id)
+        total_applied += n
+        print(f"Batch {batch_id}: {n} notas movidas.")
+
+    # If all approved batches across all time are now applied, write marker
+    remaining_approved = conn.execute(
+        "SELECT COUNT(*) FROM migration_plan WHERE status='approved'"
+    ).fetchone()[0]
+    if remaining_approved == 0:
+        total_applied_ever = conn.execute(
+            "SELECT COUNT(*) FROM migration_plan WHERE status='applied'"
+        ).fetchone()[0]
+        if total_applied_ever > 0:
+            _write_marker(vault, completed=True)
+            print("Marker atualizado: migration_completed=true.")
+
+    # Regenerate _INDEX.md via librarian
+    _try_run_librarian(vault)
+
+    return 0
+
+
+def _apply_batch(conn, vault: pathlib.Path, batch_id: int) -> int:
+    """Aplica todos os 'approved' do batch. Retorna quantos foram movidos."""
+    rows = conn.execute(
+        """SELECT id, note_path, current_location, proposed_location
+           FROM migration_plan WHERE batch_id=? AND status='approved'""",
+        (batch_id,),
+    ).fetchall()
+    if not rows:
+        return 0
+
+    now = _iso_now()
+    today = now[:10]
+
+    # Map old -> new paths for wikilink refactor step
+    path_rewrites = {}
+    renamed = []
+
+    for plan_id, note_path, curr, prop in rows:
+        src = vault / curr
+        dst = vault / prop
+        if not src.exists():
+            print(f"Aviso: fonte {src} nao existe (ja movida ou deletada). Pulando.",
+                  file=sys.stderr)
+            continue
+        if dst.exists():
+            print(f"Erro: destino {dst} ja existe. Abortando batch.", file=sys.stderr)
+            # Mark as failed via metadata, leave status=approved so rerun can resolve
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        src.rename(dst)
+        renamed.append((plan_id, curr, prop))
+        path_rewrites[curr] = prop
+
+    # Update DB: notes.path + migration_plan.status
+    with conn:
+        for plan_id, curr, prop in renamed:
+            # Update notes.path
+            note_row = conn.execute(
+                "SELECT id FROM notes WHERE path=? AND deleted_at IS NULL", (curr,)
+            ).fetchone()
+            note_id = note_row[0] if note_row else None
+            if note_id is not None:
+                conn.execute(
+                    "UPDATE notes SET path=?, indexed_at=? WHERE id=?",
+                    (prop, now, note_id),
+                )
+            conn.execute(
+                "UPDATE migration_plan SET status='applied', applied_at=? WHERE id=?",
+                (now, plan_id),
+            )
+            # Emit event
+            conn.execute(
+                "INSERT INTO events(note_id, event_type, ts, date, metadata_json) "
+                "VALUES (?, 'note_moved', ?, ?, ?)",
+                (note_id, now, today, json.dumps({"from": curr, "to": prop})),
+            )
+
+    # Wikilink refactor: scan bodies for [[old_path]] tokens that need rewriting
+    _refactor_wikilinks(vault, path_rewrites, reverse=False)
+
+    return len(renamed)
+
+
+def _refactor_wikilinks(vault: pathlib.Path, rewrites: dict,
+                        reverse: bool = False) -> int:
+    """Atualiza wikilinks que referenciam OLD -> NEW path em TODOS os .md do vault.
+
+    Heuristica: procura '[[OLD]]' ou '[[OLD|' com OLD = current_location SEM extensao.
+    Para Obsidian o convencional e '[[Nota]]' (title-based) — esses NAO precisam refactor.
+    Mas '[[pasta/subpasta/nota]]' (path-based) sim.
+
+    reverse=True usa rewrites como {new: old} pro rollback.
+    """
+    import re as _re
+    if not rewrites:
+        return 0
+
+    # Strip .md extension for the targets we look for in [[]]
+    pairs = []
+    for old, new in rewrites.items():
+        old_key = old[:-3] if old.endswith(".md") else old
+        new_key = new[:-3] if new.endswith(".md") else new
+        pairs.append((old_key, new_key))
+
+    # Build regex patterns
+    # [[OLD]] or [[OLD|alias]] -> [[NEW]] / [[NEW|alias]]
+    updated = 0
+    for md_path in vault.rglob("*.md"):
+        # Skip ignored dirs
+        rel = md_path.relative_to(vault)
+        if any(part in {".obsidian", ".trash", ".obsidian-master", "_templates", ".git"}
+               or part.startswith(".") for part in rel.parts):
+            continue
+        try:
+            text = md_path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        original = text
+        for old_key, new_key in pairs:
+            pattern = _re.compile(r"\[\[" + _re.escape(old_key) + r"(\||\]\])")
+            text = pattern.sub(r"[[" + new_key + r"\1", text)
+        if text != original:
+            md_path.write_text(text, encoding="utf-8")
+            updated += 1
+    return updated
+
+
+def _try_run_librarian(vault: pathlib.Path) -> None:
+    """Regenera _INDEX.md via librarian; silent se indisponivel."""
+    import subprocess
+    librarian = pathlib.Path(__file__).resolve().parents[2] / \
+        "obsidian-librarian" / "scripts" / "update_index.py"
+    if not librarian.exists():
+        return
+    try:
+        subprocess.run(
+            [sys.executable, str(librarian), "--vault", str(vault), "--quiet"],
+            check=False, timeout=60,
+        )
+    except Exception:
+        pass  # best effort
+
+
+def _write_marker(vault: pathlib.Path, completed: bool = True) -> None:
+    marker = vault / ".obsidian-master" / "marker.json"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    from importlib.metadata import version as _v, PackageNotFoundError
+    try:
+        kit_ver = _v("obsidian-master-kit")
+    except PackageNotFoundError:
+        kit_ver = "0.1.0+dev"
+    data = {
+        "kit_version": kit_ver,
+        "initialized_at": _iso_now(),
+        "migration_completed": completed,
+    }
+    marker.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def cmd_rollback(args) -> int:
+    vault = pathlib.Path(args.vault).expanduser().resolve()
+    db_path = vault / ".obsidian-master" / "db.sqlite"
+    if not db_path.exists():
+        print("Erro: DB nao existe.", file=sys.stderr)
+        return 1
+    from core.db import connect
+    conn = connect(vault)
+
+    try:
+        batch_id = int(args.batch)
+    except ValueError:
+        print("Erro: --batch deve ser inteiro", file=sys.stderr)
+        return 1
+
+    rows = conn.execute(
+        """SELECT id, note_path, current_location, proposed_location
+           FROM migration_plan WHERE batch_id=? AND status='applied'""",
+        (batch_id,),
+    ).fetchall()
+    if not rows:
+        print(f"Nenhum item 'applied' no batch {batch_id}. Nada pra reverter.")
+        return 0
+
+    # Reverse each rename
+    now = _iso_now()
+    today = now[:10]
+    reverted = []
+    path_rewrites = {}  # now: new -> old (reverse)
+
+    for plan_id, note_path, curr, prop in rows:
+        src = vault / prop  # is currently at proposed
+        dst = vault / curr  # restore to current
+        if not src.exists():
+            print(f"Aviso: {src} nao existe (ja revertida ou deletada). Pulando.",
+                  file=sys.stderr)
+            continue
+        if dst.exists():
+            print(f"Erro: destino {dst} ja existe. Conflito. Pulando.", file=sys.stderr)
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        src.rename(dst)
+        reverted.append((plan_id, curr, prop))
+        path_rewrites[prop] = curr
+
+    with conn:
+        for plan_id, curr, prop in reverted:
+            note_row = conn.execute(
+                "SELECT id FROM notes WHERE path=?", (prop,)
+            ).fetchone()
+            note_id = note_row[0] if note_row else None
+            if note_id is not None:
+                conn.execute(
+                    "UPDATE notes SET path=?, indexed_at=? WHERE id=?",
+                    (curr, now, note_id),
+                )
+            conn.execute(
+                "UPDATE migration_plan SET status='rolled_back', applied_at=NULL WHERE id=?",
+                (plan_id,),
+            )
+            conn.execute(
+                "INSERT INTO events(note_id, event_type, ts, date, metadata_json) "
+                "VALUES (?, 'note_moved', ?, ?, ?)",
+                (note_id, now, today,
+                 json.dumps({"from": prop, "to": curr, "rollback": True})),
+            )
+
+    # Reverse wikilinks
+    updated = _refactor_wikilinks(vault, path_rewrites, reverse=True)
+    print(f"Batch {batch_id}: {len(reverted)} notas revertidas, "
+          f"{updated} arquivos com wikilinks refatorados.")
+
+    # Se rollback fez algum batch ficar sem applied, remove migration_completed=true
+    remaining_applied = conn.execute(
+        "SELECT COUNT(*) FROM migration_plan WHERE status='applied'"
+    ).fetchone()[0]
+    if remaining_applied == 0:
+        marker = vault / ".obsidian-master" / "marker.json"
+        if marker.exists():
+            try:
+                data = json.loads(marker.read_text(encoding="utf-8"))
+                data["migration_completed"] = False
+                marker.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+            except Exception:
+                pass
+
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1057,14 +1338,17 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Numero do batch (1, 2, ...) ou 'all' (aprovar todos)")
     p_ap.set_defaults(func=cmd_approve)
 
-    # Stubs pras proximas waves
-    for (w, name, help_text) in [
-        (6, "apply",       "Aplica renames do batch (Wave 6)"),
-        (6, "rollback",    "Reverte renames do batch (Wave 6)"),
-    ]:
-        p_cmd = sub.add_parser(name, help=help_text)
-        p_cmd.add_argument("--vault", required=True)
-        p_cmd.set_defaults(func=_stub(w, name))
+    # Wave 6: apply + rollback
+    p_apl = sub.add_parser("apply", help="Aplica renames do batch (apos approval)")
+    p_apl.add_argument("--vault", required=True)
+    p_apl.add_argument("--batch", required=True,
+                       help="Numero do batch ou 'all' pra aplicar todos aprovados")
+    p_apl.set_defaults(func=cmd_apply)
+
+    p_rb = sub.add_parser("rollback", help="Reverte renames de um batch ja aplicado")
+    p_rb.add_argument("--vault", required=True)
+    p_rb.add_argument("--batch", required=True, help="Numero do batch a reverter")
+    p_rb.set_defaults(func=cmd_rollback)
 
     return p
 
