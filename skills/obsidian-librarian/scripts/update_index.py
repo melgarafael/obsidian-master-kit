@@ -431,10 +431,15 @@ def build_index(vault: pathlib.Path, records: list[NoteRecord], today: str) -> s
 
 # ---------- events (S02) ----------
 
-# Dedup window: skip scan_run/note events inserted within the last N seconds.
-# Justificativa: hook PostToolUse pode disparar varias vezes em sequencia
-# (batch de edits), e manual /sync pode sobrepor. 60s cobre ambos casos sem
-# mascarar atividade legitima de um humano re-editando a mesma nota.
+# Dedup window: skip scan_run events inserted within the last N seconds.
+# Justificativa: hook PostToolUse pode racear com /sync manual disparando 2 scans
+# redundantes quase-simultaneos. 60s cobre esse caso sem mascarar atividade
+# legitima.
+#
+# IMPORTANTE: dedup aplica SO a scan_run. Outros event types tem unicidade
+# natural dentro de um unico scan (note_* = 1 por nota por scan, link_* = 1 por
+# edge-diff por scan), entao dedup (event_type, note_id) colapsaria erroneamente
+# multiplos link_added/removed de uma mesma nota em 1 so evento.
 _DEDUP_WINDOW_S = 60
 
 
@@ -448,10 +453,11 @@ def _insert_event(
     metadata: dict | None = None,
     emitted_counts: Counter | None = None,
 ) -> bool:
-    """Insert row em events com dedup app-level.
+    """Insert row em events. Retorna True se inseriu, False se skip por dedup.
 
-    Dedup: se existe row mesmo event_type + mesmo note_id (ou NULL) na ultima
-    janela de _DEDUP_WINDOW_S segundos, skip. Retorna True se inseriu.
+    Dedup: aplica APENAS a scan_run (race hook x manual /sync). Para note_*/
+    link_*/etc a unicidade e natural (scanner itera cada nota 1x, snapshot-diff
+    e edge-granular), entao emitimos sem checar.
 
     CAUTION: NAO usamos `datetime('now', '-60 seconds')` como cutoff pq o
     SQLite retorna com separador espaco (`2026-04-15 22:00:00`) e nosso ts
@@ -460,21 +466,14 @@ def _insert_event(
     "recente". Computamos o cutoff em Python com o mesmo formato.
     """
     now_dt = _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0)
-    cutoff_ts = (now_dt - _dt.timedelta(seconds=_DEDUP_WINDOW_S)).isoformat()
-    if note_id is None:
+    if event_type == "scan_run":
+        cutoff_ts = (now_dt - _dt.timedelta(seconds=_DEDUP_WINDOW_S)).isoformat()
         existing = conn.execute(
-            "SELECT 1 FROM events WHERE event_type=? AND note_id IS NULL "
-            "AND ts > ? LIMIT 1",
-            (event_type, cutoff_ts),
+            "SELECT 1 FROM events WHERE event_type='scan_run' AND ts > ? LIMIT 1",
+            (cutoff_ts,),
         ).fetchone()
-    else:
-        existing = conn.execute(
-            "SELECT 1 FROM events WHERE event_type=? AND note_id=? "
-            "AND ts > ? LIMIT 1",
-            (event_type, note_id, cutoff_ts),
-        ).fetchone()
-    if existing is not None:
-        return False
+        if existing is not None:
+            return False
 
     ts = now_dt.isoformat()
     date = ts[:10]
