@@ -1,0 +1,565 @@
+# Instincts generated from https://github.com/melgarafael/obsidian-master-kit
+# Generated: 2026-04-15T22:24:55.422Z
+# Version: 2.0
+# NOTE: This file supplements (does not replace) any existing curated instincts.
+# High-confidence manually curated instincts should be preserved alongside these.
+
+---
+id: obsidian-master-kit-commit-conventional
+trigger: "when writing a commit message"
+confidence: 0.85
+domain: git
+source: repo-analysis
+source_repo: https://github.com/melgarafael/obsidian-master-kit
+---
+
+# Obsidian Master Kit Commit Conventional
+
+## Action
+
+Use conventional commit format with prefixes: feat
+
+## Evidence
+
+- 5 commits analyzed
+- Detected conventional commit pattern
+- Examples: feat(expand-ep05): skill shell + SKILL.md + CLI stubs [wave 1], feat(expand-ep05): KNN engine via sqlite-vec + blob fallback [wave 2]
+
+---
+id: obsidian-master-kit-commit-length
+trigger: "when writing a commit message"
+confidence: 0.6
+domain: git
+source: repo-analysis
+source_repo: https://github.com/melgarafael/obsidian-master-kit
+---
+
+# Obsidian Master Kit Commit Length
+
+## Action
+
+Write moderate-length commit messages (~71 characters)
+
+## Evidence
+
+- Average commit message length: 71 chars
+- Based on 5 commits
+
+---
+id: obsidian-master-kit-naming-files
+trigger: "when creating a new file"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/melgarafael/obsidian-master-kit
+---
+
+# Obsidian Master Kit Naming Files
+
+## Action
+
+Use snake_case naming convention
+
+## Evidence
+
+- Analyzed file naming patterns in repository
+- Dominant pattern: snake_case
+
+---
+id: obsidian-master-kit-import-relative
+trigger: "when importing modules"
+confidence: 0.75
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/melgarafael/obsidian-master-kit
+---
+
+# Obsidian Master Kit Import Relative
+
+## Action
+
+Use relative imports for project files
+
+## Evidence
+
+- Import analysis shows relative import pattern
+- Example: import { x } from '../lib/x'
+
+---
+id: obsidian-master-kit-export-style
+trigger: "when exporting from a module"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/melgarafael/obsidian-master-kit
+---
+
+# Obsidian Master Kit Export Style
+
+## Action
+
+Prefer named exports
+
+## Evidence
+
+- Export pattern analysis
+- Dominant style: named
+
+---
+id: obsidian-master-kit-test-separate
+trigger: "when writing tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/melgarafael/obsidian-master-kit
+---
+
+# Obsidian Master Kit Test Separate
+
+## Action
+
+Place tests in the tests/ or __tests__/ directory, mirroring src structure
+
+## Evidence
+
+- Separate test directory pattern detected
+- Tests live in dedicated test folders
+
+---
+id: obsidian-master-kit-test-naming
+trigger: "when creating a test file"
+confidence: 0.85
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/melgarafael/obsidian-master-kit
+---
+
+# Obsidian Master Kit Test Naming
+
+## Action
+
+Name test files using the pattern: *.test.ts
+
+## Evidence
+
+- File pattern: *.test.ts
+- Consistent across test files
+
+---
+id: obsidian-master-kit-workflow-feature-development
+trigger: "when implementing a new feature"
+confidence: 0.9
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/melgarafael/obsidian-master-kit
+---
+
+# Obsidian Master Kit Workflow Feature Development
+
+## Action
+
+Follow the feature-development workflow:
+1. Add feature implementation
+2. Add tests for feature
+3. Update documentation
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~30x per month
+- Files: **/*.test.*
+
+---
+id: obsidian-master-kit-workflow-add-new-skill-or-feature-module
+trigger: "when doing add new skill or feature module"
+confidence: 0.55
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/melgarafael/obsidian-master-kit
+---
+
+# Obsidian Master Kit Workflow Add New Skill Or Feature Module
+
+## Action
+
+Follow the add-new-skill-or-feature-module workflow:
+1. Create or update SKILL.md with frontmatter and usage documentation.
+2. Implement initial CLI or script file(s) with argparse or similar stub logic.
+3. Add or update core utility modules as needed for shared functionality.
+4. Write initial test files covering CLI, argument parsing, and core logic.
+5. Verify regression tests and code coverage.
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~1x per month
+- Files: skills/<skill-name>/SKILL.md, skills/<skill-name>/scripts/<feature>.py, core/<utility>.py
+
+---
+id: obsidian-master-kit-workflow-feature-implementation-with-tests
+trigger: "when doing feature implementation with tests"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/melgarafael/obsidian-master-kit
+---
+
+# Obsidian Master Kit Workflow Feature Implementation With Tests
+
+## Action
+
+Follow the feature-implementation-with-tests workflow:
+1. Create or update the main script file implementing the feature (e.g., knn.py, gaps.py, generate.py).
+2. Write or update corresponding test files with unit and integration cases.
+3. Update CLI wiring or main entrypoint to expose the new feature.
+4. Ensure regression tests pass and coverage is maintained.
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: skills/<skill-name>/scripts/<feature>.py, tests/test_<feature>.py, skills/<skill-name>/scripts/expand.py
+
+---
+id: obsidian-master-kit-workflow-cli-wireup-and-end-to-end-integration
+trigger: "when doing cli wireup and end to end integration"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/melgarafael/obsidian-master-kit
+---
+
+# Obsidian Master Kit Workflow Cli Wireup And End To End Integration
+
+## Action
+
+Follow the cli-wireup-and-end-to-end-integration workflow:
+1. Update CLI script (expand.py) to wire up new or existing subcommands.
+2. Update or rewrite CLI shell tests to cover real argument parsing and feature invocation.
+3. Add or update integration tests for E2E flows.
+4. Check regression and coverage.
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: skills/<skill-name>/scripts/expand.py, tests/test_expand_cli_shell.py, tests/test_expand_<feature>.py
+
+---
+id: obsidian-master-kit-workflow-extend-feature-with-integration-and-indexing
+trigger: "when doing extend feature with integration and indexing"
+confidence: 0.55
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/melgarafael/obsidian-master-kit
+---
+
+# Obsidian Master Kit Workflow Extend Feature With Integration And Indexing
+
+## Action
+
+Follow the extend-feature-with-integration-and-indexing workflow:
+1. Update feature implementation to add integration logic (e.g., linking to MOC, triggering indexing).
+2. Update or add tests to cover integration scenarios, including deduplication and error handling.
+3. Ensure frontmatter and output formats remain consistent.
+4. Run regression tests to confirm E2E flow.
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~1x per month
+- Files: skills/<skill-name>/scripts/<feature>.py, tests/test_<feature>.py
+
+---
+id: obsidian-master-kit-instinct-file-naming
+trigger: "When creating a new file in the repository"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: melgarafael/obsidian-master-kit
+---
+
+# Obsidian Master Kit Instinct File Naming
+
+## Action
+
+Name the file using snake_case convention
+
+## Evidence
+
+- Pattern in files: core/paths.py, skills/obsidian-expand/scripts/expand.py
+
+---
+id: obsidian-master-kit-instinct-function-naming
+trigger: "When defining a new function"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: melgarafael/obsidian-master-kit
+---
+
+# Obsidian Master Kit Instinct Function Naming
+
+## Action
+
+Name the function using camelCase convention
+
+## Evidence
+
+- Pattern in codeStyle.namingConventions.functions
+
+---
+id: obsidian-master-kit-instinct-class-naming
+trigger: "When defining a new class"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: melgarafael/obsidian-master-kit
+---
+
+# Obsidian Master Kit Instinct Class Naming
+
+## Action
+
+Name the class using PascalCase convention
+
+## Evidence
+
+- Pattern in codeStyle.namingConventions.classes
+
+---
+id: obsidian-master-kit-instinct-constant-naming
+trigger: "When defining a constant"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: melgarafael/obsidian-master-kit
+---
+
+# Obsidian Master Kit Instinct Constant Naming
+
+## Action
+
+Name the constant using SCREAMING_SNAKE_CASE convention
+
+## Evidence
+
+- Pattern in codeStyle.namingConventions.constants
+
+---
+id: obsidian-master-kit-instinct-import-style
+trigger: "When importing modules within the package"
+confidence: 0.85
+domain: code-style
+source: repo-analysis
+source_repo: melgarafael/obsidian-master-kit
+---
+
+# Obsidian Master Kit Instinct Import Style
+
+## Action
+
+Use relative imports
+
+## Evidence
+
+- Pattern in codeStyle.importStyle
+
+---
+id: obsidian-master-kit-instinct-export-style
+trigger: "When exporting functions or classes from a module"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: melgarafael/obsidian-master-kit
+---
+
+# Obsidian Master Kit Instinct Export Style
+
+## Action
+
+Use named exports
+
+## Evidence
+
+- Pattern in codeStyle.exportStyle
+
+---
+id: obsidian-master-kit-instinct-test-file-location
+trigger: "When adding tests for a feature or module"
+confidence: 0.9
+domain: testing
+source: repo-analysis
+source_repo: melgarafael/obsidian-master-kit
+---
+
+# Obsidian Master Kit Instinct Test File Location
+
+## Action
+
+Place test files in the separate 'tests' folder
+
+## Evidence
+
+- Pattern in architecture.folderStructure.testLocation
+- Files: tests/test_core_paths.py, tests/test_expand_cli_shell.py
+
+---
+id: obsidian-master-kit-instinct-test-file-naming
+trigger: "When naming a test file"
+confidence: 0.9
+domain: testing
+source: repo-analysis
+source_repo: melgarafael/obsidian-master-kit
+---
+
+# Obsidian Master Kit Instinct Test File Naming
+
+## Action
+
+Use the pattern test_<feature>.py or test_<feature>_cli_shell.py
+
+## Evidence
+
+- Pattern in testing.filePattern
+- Files: tests/test_expand_cli_shell.py, tests/test_core_paths.py
+
+---
+id: obsidian-master-kit-instinct-test-types
+trigger: "When writing tests"
+confidence: 0.85
+domain: testing
+source: repo-analysis
+source_repo: melgarafael/obsidian-master-kit
+---
+
+# Obsidian Master Kit Instinct Test Types
+
+## Action
+
+Write unit tests for individual modules and integration tests for CLI or E2E flows
+
+## Evidence
+
+- Pattern in testing.testTypes
+- Workflow steps: 'Write or update corresponding test files with unit and integration cases.'
+
+---
+id: obsidian-master-kit-instinct-git-commit-format
+trigger: "When making a commit"
+confidence: 0.9
+domain: git
+source: repo-analysis
+source_repo: melgarafael/obsidian-master-kit
+---
+
+# Obsidian Master Kit Instinct Git Commit Format
+
+## Action
+
+Use the conventional commit format with 'feat' prefix for features, and include scope and description (e.g., feat(expand-ep05): description)
+
+## Evidence
+
+- Pattern in commits.type and commits.prefixes
+- Examples: 'feat(expand-ep05): ...'
+
+---
+id: obsidian-master-kit-instinct-git-commit-length
+trigger: "When writing a commit message"
+confidence: 0.7
+domain: git
+source: repo-analysis
+source_repo: melgarafael/obsidian-master-kit
+---
+
+# Obsidian Master Kit Instinct Git Commit Length
+
+## Action
+
+Keep the commit message concise, around 71 characters on average
+
+## Evidence
+
+- Pattern in commits.averageLength
+
+---
+id: obsidian-master-kit-instinct-add-new-skill-workflow
+trigger: "When someone wants to add a new skill or feature module to the system"
+confidence: 0.95
+domain: workflow
+source: repo-analysis
+source_repo: melgarafael/obsidian-master-kit
+---
+
+# Obsidian Master Kit Instinct Add New Skill Workflow
+
+## Action
+
+Create or update SKILL.md, implement initial CLI/script, add core utilities, write initial tests, and verify regression tests and coverage
+
+## Evidence
+
+- Workflow: add-new-skill-or-feature-module
+- Files: skills/<skill-name>/SKILL.md, skills/<skill-name>/scripts/<feature>.py, core/<utility>.py, tests/test_<feature>_cli_shell.py, tests/test_core_<utility>.py
+
+---
+id: obsidian-master-kit-instinct-feature-implementation-workflow
+trigger: "When someone wants to add a new algorithm, detector, or engine to an existing skill/module"
+confidence: 0.92
+domain: workflow
+source: repo-analysis
+source_repo: melgarafael/obsidian-master-kit
+---
+
+# Obsidian Master Kit Instinct Feature Implementation Workflow
+
+## Action
+
+Implement the feature in the main script, write/update unit and integration tests, update CLI wiring, and ensure regression tests pass
+
+## Evidence
+
+- Workflow: feature-implementation-with-tests
+- Files: skills/<skill-name>/scripts/<feature>.py, tests/test_<feature>.py, skills/<skill-name>/scripts/expand.py, tests/test_expand_cli_shell.py
+
+---
+id: obsidian-master-kit-instinct-cli-wireup-workflow
+trigger: "When someone wants to expose new functionality through the CLI and validate E2E behavior"
+confidence: 0.9
+domain: workflow
+source: repo-analysis
+source_repo: melgarafael/obsidian-master-kit
+---
+
+# Obsidian Master Kit Instinct Cli Wireup Workflow
+
+## Action
+
+Update CLI script to wire up subcommands, update CLI shell tests, add integration tests, and check regression/coverage
+
+## Evidence
+
+- Workflow: cli-wireup-and-end-to-end-integration
+- Files: skills/<skill-name>/scripts/expand.py, tests/test_expand_cli_shell.py, tests/test_expand_<feature>.py
+
+---
+id: obsidian-master-kit-instinct-extend-feature-integration-workflow
+trigger: "When someone wants to close the loop by integrating new outputs with indexing, linking, or other system modules"
+confidence: 0.88
+domain: workflow
+source: repo-analysis
+source_repo: melgarafael/obsidian-master-kit
+---
+
+# Obsidian Master Kit Instinct Extend Feature Integration Workflow
+
+## Action
+
+Update feature implementation for integration logic, update/add tests for integration scenarios, ensure output consistency, and run regression tests
+
+## Evidence
+
+- Workflow: extend-feature-with-integration-and-indexing
+- Files: skills/<skill-name>/scripts/<feature>.py, tests/test_<feature>.py
+
