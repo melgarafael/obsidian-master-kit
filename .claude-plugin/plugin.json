@@ -18,5 +18,18 @@
     "pt-br",
     "markdown",
     "zettelkasten"
-  ]
+  ],
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/post-vault-write.py\""
+          }
+        ]
+      }
+    ]
+  }
 }
