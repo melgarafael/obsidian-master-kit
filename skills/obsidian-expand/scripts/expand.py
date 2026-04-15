@@ -45,6 +45,7 @@ from core.paths import resolve_vault  # noqa: E402
 
 _GAPS_PATH = pathlib.Path(__file__).parent / "gaps.py"
 _KNN_PATH = pathlib.Path(__file__).parent / "knn.py"
+_GENERATE_PATH = pathlib.Path(__file__).parent / "generate.py"
 
 
 def _load_by_path(module_name: str, file_path: pathlib.Path):
@@ -60,12 +61,6 @@ def _load_by_path(module_name: str, file_path: pathlib.Path):
     sys.modules[module_name] = mod
     spec.loader.exec_module(mod)
     return mod
-
-
-# Ainda stub; materializacao real em Wave 4.
-WAVE_PLAN = {
-    "generate": 4,
-}
 
 
 def _emit(payload: dict[str, Any]) -> None:
@@ -290,27 +285,17 @@ def _count_by_kind(candidates) -> dict[str, int]:
 
 
 def cmd_generate(args: argparse.Namespace) -> int:
-    # `generate` e distinto: nao e analise, materializa sugestao. Tambem
-    # fica stub ate Wave 4.
     vault = resolve_vault(args.vault)
     conn = connect(vault)
-    _emit(
-        {
-            "command": "generate",
-            "vault": str(vault),
-            "suggestion_id": args.suggestion_id,
-            "dry_run": bool(args.dry_run),
-            "written_path": None,
-            "wave_pending": True,
-            "planned_for_wave": WAVE_PLAN["generate"],
-            "note": (
-                "Shell da Wave 1 (Epic 05 S01). Geracao via LLM chega "
-                "na Wave 4 (S04)."
-            ),
-        }
+    gen = _load_by_path("_expand_generate", _GENERATE_PATH)
+    result = gen.generate_note(
+        conn, args.suggestion_id, vault, dry_run=bool(args.dry_run)
     )
-    _ = conn  # garante que DB abriu ok antes de reportar
-    return 0
+    payload = _base_payload("generate", vault, conn, args)
+    payload["suggestion_id"] = args.suggestion_id
+    payload.update(result)
+    _emit(payload)
+    return 0 if "error" not in result else 1
 
 
 # ---------- argparse ----------

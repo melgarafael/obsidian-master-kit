@@ -231,7 +231,9 @@ def test_moc_com_path_inexistente_reporta(expand, populated_vault, capsys):
     assert "nao encontrada" in payload.get("note", "")
 
 
-def test_generate_stub_permanece_wave_4(expand, populated_vault, capsys):
+def test_generate_com_suggestion_id_inexistente_reporta_erro(
+    expand, populated_vault, capsys
+):
     vault, _ = populated_vault
     rc, payload = _run_and_parse(
         expand,
@@ -240,16 +242,15 @@ def test_generate_stub_permanece_wave_4(expand, populated_vault, capsys):
             "--vault",
             str(vault),
             "--suggestion-id",
-            "42",
+            "99999",
         ],
         capsys,
     )
-    assert rc == 0
+    assert rc == 1
     assert payload["command"] == "generate"
-    assert payload["suggestion_id"] == 42
-    assert payload["written_path"] is None
-    assert payload["wave_pending"] is True
-    assert payload["planned_for_wave"] == 4
+    assert payload["suggestion_id"] == 99999
+    assert "error" in payload
+    assert "nao encontrada" in payload["error"]
 
 
 # ---------- 3. dry-run default / no-dry-run persiste ----------
