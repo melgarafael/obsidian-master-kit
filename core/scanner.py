@@ -267,11 +267,17 @@ def _write_embedding(
     vec: Any,
     vec_loaded: bool,
 ) -> None:
-    """Upsert em vec_notes OU notes_embedding_blob conforme conn.vec_loaded."""
+    """Upsert em vec_notes OU notes_embedding_blob conforme conn.vec_loaded.
+
+    Nota sobre vec0: a virtual table do sqlite-vec NAO suporta
+    `INSERT OR REPLACE` (levanta UNIQUE constraint em vez de substituir).
+    Idioma canonico: DELETE + INSERT. Tabela regular aceita REPLACE normal.
+    """
     blob = _serialize_vec(vec, vec_loaded)
     if vec_loaded:
+        conn.execute("DELETE FROM vec_notes WHERE note_id=?", (note_id,))
         conn.execute(
-            "INSERT OR REPLACE INTO vec_notes (note_id, embedding) VALUES (?, ?)",
+            "INSERT INTO vec_notes (note_id, embedding) VALUES (?, ?)",
             (note_id, blob),
         )
     else:
@@ -654,7 +660,21 @@ def _process_file(
             )
             reembedded = True
         except Exception as exc:
-            _LOG.warning("embedder.embed falhou em %s (%s)", rel_str, exc)
+            # Dim-mismatch (sqlite_vec enforcement) e um config bug que afeta
+            # TODA nota, nao um hiccup per-nota. Sobe pra ERROR pra operador
+            # diagnosticar sem caçar warning no log.
+            embedder_dim = getattr(ctx.embedder, "dim", None)
+            is_dim_mismatch = (
+                isinstance(exc, sqlite3.OperationalError)
+                and "Dimension" in str(exc)
+            )
+            log_fn = _LOG.error if is_dim_mismatch else _LOG.warning
+            log_fn(
+                "embedder.embed falhou em note_id=%s path=%s "
+                "(model=%s dim=%s): %s: %s",
+                note_id, rel_str, embedder_model, embedder_dim,
+                type(exc).__name__, exc,
+            )
 
     word_delta: int | None
     if existing is None or existing["deleted_at"] is not None:

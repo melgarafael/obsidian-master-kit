@@ -23,10 +23,14 @@ from core.scanner import NoteChange, ScanReport, scan, scan_single_file
 
 class _FakeEmbedder:
     """Embedder determinstico pra testes. `responses` e um map texto→vetor
-    opcional; qualquer texto nao mapeado retorna zeros."""
+    opcional; qualquer texto nao mapeado retorna zeros.
+
+    `dim=256` alinha com `vec_notes` (float[256], hardcoded em core/db.py).
+    Isso e canonico por BRIEF §3.1 (Model2Vec MRL truncado a 256).
+    """
 
     model_name = "fake-test-v1"
-    dim = 4
+    dim = 256
 
     def __init__(self, responses: dict[str, np.ndarray] | None = None,
                  model_name: str = "fake-test-v1") -> None:
