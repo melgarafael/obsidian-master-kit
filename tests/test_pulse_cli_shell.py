@@ -70,30 +70,8 @@ def test_refresh_roda_stages(pulse, initialized_vault, capsys):
     assert p["total_duration_ms"] >= 0
 
 
-def test_serve_stub_default_port(pulse, initialized_vault, capsys):
-    rc, p = _run(pulse, ["serve", "--vault", str(initialized_vault)], capsys)
-    assert rc == 0
-    assert p["command"] == "serve"
-    assert p["host"] == "127.0.0.1"
-    assert p["port"] == 4711
-    assert p["planned_for_wave"] == 6
-
-
-def test_serve_port_customizado(pulse, initialized_vault, capsys):
-    rc, p = _run(
-        pulse,
-        ["serve", "--vault", str(initialized_vault), "--port", "8080"],
-        capsys,
-    )
-    assert rc == 0
-    assert p["port"] == 8080
-
-
-def test_daemon_stub(pulse, initialized_vault, capsys):
-    rc, p = _run(pulse, ["daemon", "--vault", str(initialized_vault)], capsys)
-    assert rc == 0
-    assert p["command"] == "daemon"
-    assert p["planned_for_wave"] == 6
+# serve/daemon bloqueiam em uvicorn.run — nao testaveis via CLI direto.
+# Cobertura via test_pulse_server.py usando build_app + TestClient.
 
 
 def test_status_funcional_em_vault_vazio(pulse, initialized_vault, capsys):

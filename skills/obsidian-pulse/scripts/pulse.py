@@ -32,13 +32,10 @@ from core.db import connect  # noqa: E402
 from core.paths import resolve_vault  # noqa: E402
 
 
-WAVE_PLAN = {
-    "serve": 6,
-    "daemon": 6,
-    # `refresh` ja wired (Wave 2); `status` ja implementado na Wave 1
-}
+WAVE_PLAN: dict[str, int] = {}  # todos os subcomandos wired
 
 _WORKER_PATH = pathlib.Path(__file__).parent / "worker.py"
+_SERVER_PATH = pathlib.Path(__file__).parent / "server.py"
 
 
 def _emit(payload: dict[str, Any]) -> None:
@@ -81,32 +78,38 @@ def cmd_refresh(args) -> int:
 
 def cmd_serve(args) -> int:
     vault = resolve_vault(args.vault)
-    conn = connect(vault)
-    payload = _base("serve", vault, conn, args)
-    payload.update({
-        "wave_pending": True,
-        "planned_for_wave": WAVE_PLAN["serve"],
-        "host": "127.0.0.1",
-        "port": args.port,
-        "note": "Stub Wave 1 — FastAPI chega em Wave 6.",
-    })
-    _emit(payload)
+    # Import lazy — FastAPI e extra opcional
+    try:
+        import uvicorn
+    except ImportError:
+        print(
+            "Erro: dependencias do pulse nao instaladas.\n"
+            "Instale com: pip install 'obsidian-master-kit[pulse]'",
+            file=sys.stderr,
+        )
+        return 1
+    server = _load_by_path("_pulse_server", _SERVER_PATH)
+    app = server.build_app(vault)
+    token = app.state.pulse_token
+    print(f"obsidian-pulse servindo em http://127.0.0.1:{args.port}")
+    print(f"Token pra /api/*: {token}")
+    print(f"(gravado em {vault}/.obsidian-master/pulse-token.txt)")
+    uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")
     return 0
 
 
 def cmd_daemon(args) -> int:
+    """Daemon = refresh inicial + serve em foreground."""
     vault = resolve_vault(args.vault)
     conn = connect(vault)
-    payload = _base("daemon", vault, conn, args)
-    payload.update({
-        "wave_pending": True,
-        "planned_for_wave": WAVE_PLAN["daemon"],
-        "host": "127.0.0.1",
-        "port": args.port,
-        "note": "Stub Wave 1 — daemon (refresh+serve) em Wave 6.",
-    })
-    _emit(payload)
-    return 0
+    worker = _load_by_path("_pulse_worker", _WORKER_PATH)
+    result = worker.run_batch_analytics(conn)
+    print(
+        f"Refresh inicial concluido em {result['total_duration_ms']:.0f}ms",
+        file=sys.stderr,
+    )
+    conn.close()
+    return cmd_serve(args)
 
 
 def cmd_status(args) -> int:
