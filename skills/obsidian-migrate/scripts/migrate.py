@@ -717,6 +717,281 @@ def cmd_propose(args) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# Wave 5: plan + approve
+# ---------------------------------------------------------------------------
+def _iso_now():
+    import datetime as _dt
+    return _dt.datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _parse_proposal_overrides(proposal_path: pathlib.Path) -> dict[str, str]:
+    """Parse a tabela '## Mapeamento pasta -> area' e extrai folder -> slug.
+
+    Aceita linhas com slug em backticks, e.g. `| Foo | 5 | X | 80% | `slug` | clear |`.
+    Linhas com `_(decidir)_` ou `_(ruido)_` sao ignoradas (usuario nao decidiu).
+    """
+    import re as _re
+    content = proposal_path.read_text(encoding="utf-8")
+    lines = content.splitlines()
+    in_table = False
+    header_seen = False
+    overrides: dict[str, str] = {}
+    for line in lines:
+        if line.startswith("## Mapeamento pasta"):
+            in_table = True
+            continue
+        if in_table and line.startswith("## "):
+            break  # end of section
+        if in_table and line.startswith("|"):
+            if "---" in line:
+                header_seen = True
+                continue
+            if not header_seen:
+                continue
+            parts = [p.strip() for p in line.strip("|").split("|")]
+            if len(parts) < 6:
+                continue
+            folder = parts[0]
+            area_cell = parts[4]
+            m = _re.match(r"`([a-z0-9\-]+)`", area_cell)
+            if m:
+                overrides[folder] = m.group(1)
+    return overrides
+
+
+def _ensure_areas_from_overrides(conn, overrides: dict[str, str]):
+    """Se o usuario adicionou slugs novos no proposal.md, registra em areas."""
+    now = _iso_now()
+    with conn:
+        for folder, slug in overrides.items():
+            exists = conn.execute("SELECT id FROM areas WHERE slug=?", (slug,)).fetchone()
+            if exists:
+                continue
+            is_canonical = 1 if slug in (
+                "pessoal", "profissional", "pesquisa", "ai-memory"
+            ) else 0
+            conn.execute(
+                """INSERT INTO areas(slug, label, folder, is_canonical, sensitive, created_at)
+                   VALUES (?, ?, ?, ?, 0, ?)""",
+                (slug, folder, folder, is_canonical, now),
+            )
+
+
+def cmd_plan(args) -> int:
+    vault = pathlib.Path(args.vault).expanduser().resolve()
+    db_path = vault / ".obsidian-master" / "db.sqlite"
+    if not db_path.exists():
+        print("Erro: DB nao existe. Rode 'shadow-scan' -> 'cluster' -> 'propose' primeiro.",
+              file=sys.stderr)
+        return 1
+
+    from core.db import connect
+    conn = connect(vault)
+
+    # Check propose step has been run
+    areas = conn.execute(
+        "SELECT slug, label, folder FROM areas WHERE is_canonical=0"
+    ).fetchall()
+    if not areas:
+        print("Erro: nenhuma area descoberta. Rode 'propose' primeiro.", file=sys.stderr)
+        return 1
+
+    # Load proposal.md overrides se existir
+    proposal_path = vault / ".obsidian-master" / "migration-proposal.md"
+    user_overrides: dict[str, str] = {}
+    if proposal_path.exists():
+        user_overrides = _parse_proposal_overrides(proposal_path)
+        if user_overrides:
+            print(f"  Overrides lidos de {proposal_path.name}: "
+                  f"{len(user_overrides)} pastas.")
+
+    # Folder -> area_slug map
+    folder_to_slug = {row[2]: row[0] for row in areas}  # from DB (clear ones)
+    folder_to_slug.update(user_overrides)  # user-edited wins
+
+    # Garante que todas as areas dos overrides existem em `areas`
+    _ensure_areas_from_overrides(conn, user_overrides)
+
+    # Clear existing pending plan (idempotency)
+    with conn:
+        conn.execute("DELETE FROM migration_plan WHERE status='pending'")
+
+    # Generate plan entries
+    rows = conn.execute("""
+        SELECT n.id, n.path, n.title, cn.cluster_id, c.label
+        FROM notes n
+        LEFT JOIN cluster_notes cn ON cn.note_id = n.id
+        LEFT JOIN clusters c ON c.id = cn.cluster_id
+        WHERE n.deleted_at IS NULL
+        ORDER BY n.path
+    """).fetchall()
+
+    clear_folders = {row[2] for row in areas}
+    plan_entries = []
+    for nid, path, title, cluster_id, cluster_label in rows:
+        top_folder = path.split("/", 1)[0] if "/" in path else "(raiz)"
+        area_slug = folder_to_slug.get(top_folder)
+        if not area_slug:
+            # Pasta nao mapeada: skip (usuario decide manualmente)
+            continue
+
+        current_location = path
+        # Preserva subpath interno relativo ao folder
+        rest = path.split("/", 1)[1] if "/" in path else path
+        proposed_location = f"{area_slug}/{rest}"
+        if proposed_location == current_location:
+            continue  # nao precisa mover
+
+        # Confidence + reason
+        if cluster_id is None:
+            confidence = 0.2
+            reason = (f"Nota em pasta '{top_folder}' (area '{area_slug}'), sem cluster "
+                      "(outlier). Movimento baseado so na pasta.")
+        else:
+            confidence = 0.8 if top_folder in clear_folders else 0.5
+            reason = (f"Nota em pasta '{top_folder}' com cluster dominante "
+                      f"'{cluster_label}' (area '{area_slug}').")
+
+        plan_entries.append({
+            "note_id": nid,
+            "note_path": path,
+            "current_location": current_location,
+            "proposed_location": proposed_location,
+            "reason": reason,
+            "confidence": confidence,
+        })
+
+    # Batch em lotes de 20
+    batch_size = 20
+    with conn:
+        for i, entry in enumerate(plan_entries):
+            batch_id = (i // batch_size) + 1
+            conn.execute(
+                """INSERT INTO migration_plan(note_path, current_location, proposed_location,
+                                              reason, confidence, batch_id, status)
+                   VALUES (?, ?, ?, ?, ?, ?, 'pending')""",
+                (entry["note_path"], entry["current_location"],
+                 entry["proposed_location"], entry["reason"],
+                 entry["confidence"], batch_id),
+            )
+
+    total = len(plan_entries)
+    n_batches = (total + batch_size - 1) // batch_size
+    print(f"Plan OK. {total} notas pra mover em {n_batches} batch(es) de ate {batch_size}.")
+    print(f"  Status atual: {total} pending")
+    print(f"  Proximo: 'approve --batch 1' (aprovacao interativa) ou "
+          f"'approve --batch all' (aprovar tudo de uma vez).")
+    return 0
+
+
+def cmd_approve(args) -> int:
+    vault = pathlib.Path(args.vault).expanduser().resolve()
+    db_path = vault / ".obsidian-master" / "db.sqlite"
+    if not db_path.exists():
+        print("Erro: DB nao existe. Rode 'plan' primeiro.", file=sys.stderr)
+        return 1
+
+    from core.db import connect
+    conn = connect(vault)
+
+    # Identify batch(es)
+    if args.batch == "all":
+        total = conn.execute(
+            "SELECT COUNT(*) FROM migration_plan WHERE status='pending'"
+        ).fetchone()[0]
+        if total == 0:
+            print("Nenhum item pending em migration_plan.")
+            return 0
+        print(f"Voce vai aprovar em MASSA {total} movimentos de notas.")
+        c1 = input("Tem certeza? [y/N]: ").strip().lower()
+        if c1 not in ("y", "yes", "s", "sim"):
+            print("Abortado.")
+            return 1
+        c2 = input("Confirme de novo: aprovar TODOS? [y/N]: ").strip().lower()
+        if c2 not in ("y", "yes", "s", "sim"):
+            print("Abortado.")
+            return 1
+        with conn:
+            conn.execute(
+                "UPDATE migration_plan SET status='approved', decided_at=? "
+                "WHERE status='pending'",
+                (_iso_now(),),
+            )
+        print(f"OK, {total} movimentos aprovados.")
+        return 0
+
+    # Specific batch
+    try:
+        batch_id = int(args.batch)
+    except ValueError:
+        print(f"Erro: --batch deve ser inteiro ou 'all', got '{args.batch}'",
+              file=sys.stderr)
+        return 1
+
+    rows = conn.execute(
+        """SELECT id, note_path, current_location, proposed_location, reason, confidence
+           FROM migration_plan WHERE batch_id=? AND status='pending'
+           ORDER BY id""",
+        (batch_id,),
+    ).fetchall()
+    if not rows:
+        print(f"Nenhum item pending no batch {batch_id}.")
+        return 0
+
+    print(f"Batch {batch_id}: {len(rows)} movimentos pra revisar.")
+    print("Comandos por item: [y]es / [n]o / [a]ll-yes-from-here / [s]kip-remaining")
+    print("")
+
+    approve_rest = False
+    skip_rest = False
+    decisions: dict[int, str] = {}
+    for i, (rec_id, note_path, curr, prop, reason, conf) in enumerate(rows):
+        if skip_rest:
+            break
+        if approve_rest:
+            decisions[rec_id] = "approved"
+            continue
+        print(f"[{i+1}/{len(rows)}] {note_path}")
+        print(f"  de:  {curr}")
+        print(f"  pra: {prop}")
+        print(f"  confianca: {conf:.2f}")
+        print(f"  motivo: {reason}")
+        while True:
+            ans = input("  [y/n/a/s]? ").strip().lower()
+            if ans in ("y", "yes", "sim"):
+                decisions[rec_id] = "approved"
+                break
+            elif ans in ("n", "no", "nao", "não"):
+                decisions[rec_id] = "rejected"
+                break
+            elif ans in ("a", "all"):
+                approve_rest = True
+                decisions[rec_id] = "approved"
+                break
+            elif ans in ("s", "skip", "pula"):
+                skip_rest = True
+                break
+            else:
+                print("  Resposta invalida. Use y, n, a, s.")
+
+    # Persist decisions
+    now = _iso_now()
+    with conn:
+        for rec_id, status in decisions.items():
+            conn.execute(
+                "UPDATE migration_plan SET status=?, decided_at=? WHERE id=?",
+                (status, now, rec_id),
+            )
+
+    n_approved = sum(1 for v in decisions.values() if v == "approved")
+    n_rejected = sum(1 for v in decisions.values() if v == "rejected")
+    n_skipped = len(rows) - len(decisions)
+    print(f"\nBatch {batch_id} decidido: {n_approved} aprovados, "
+          f"{n_rejected} rejeitados, {n_skipped} skipped (ainda pending).")
+    return 0
+
+
 def _stub(wave: int, cmd: str):
     """Gera um handler stub pra subcommand nao implementado ainda."""
     def handler(args) -> int:
@@ -771,10 +1046,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_pr.add_argument("--vault", required=True)
     p_pr.set_defaults(func=cmd_propose)
 
+    # Wave 5: plan + approve
+    p_pl = sub.add_parser("plan", help="Gera migration_plan em lotes de 20 notas")
+    p_pl.add_argument("--vault", required=True)
+    p_pl.set_defaults(func=cmd_plan)
+
+    p_ap = sub.add_parser("approve", help="Approval interativo por batch (y/n/a/s)")
+    p_ap.add_argument("--vault", required=True)
+    p_ap.add_argument("--batch", required=True,
+                      help="Numero do batch (1, 2, ...) ou 'all' (aprovar todos)")
+    p_ap.set_defaults(func=cmd_approve)
+
     # Stubs pras proximas waves
     for (w, name, help_text) in [
-        (5, "plan",        "Popula migration_plan em lotes de 20"),
-        (5, "approve",     "Approval interativo por batch"),
         (6, "apply",       "Aplica renames do batch (Wave 6)"),
         (6, "rollback",    "Reverte renames do batch (Wave 6)"),
     ]:
