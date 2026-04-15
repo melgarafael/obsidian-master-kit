@@ -60,24 +60,23 @@ def test_without_subcommand_fails(org):
     assert exc.value.code == 2
 
 
-def test_cluster_stub(org, initialized_vault, capsys):
+def test_cluster_vault_vazio_reporta_erro_util(org, initialized_vault, capsys):
+    """Vault sem notas suficientes pra HDBSCAN: cmd retorna rc=1 com error."""
     rc, p = _run(org, ["cluster", "--vault", str(initialized_vault)], capsys)
-    assert rc == 0
+    assert rc == 1
     assert p["command"] == "cluster"
-    assert p["planned_for_wave"] == 2
-    assert p["clusters"] == []
-    assert p["latest"] is False
+    assert "error" in p
+    assert p["note_count"] == 0
 
 
-def test_cluster_com_flags(org, initialized_vault, capsys):
+def test_cluster_latest_vazio_antes_de_run(org, initialized_vault, capsys):
     rc, p = _run(
-        org,
-        ["cluster", "--vault", str(initialized_vault), "--latest", "--ai-label"],
-        capsys,
+        org, ["cluster", "--vault", str(initialized_vault), "--latest"], capsys
     )
     assert rc == 0
     assert p["latest"] is True
-    assert p["ai_label"] is True
+    assert p["clusters"] == []
+    assert p["run_id"] is None
 
 
 def test_duplicates_stub(org, initialized_vault, capsys):

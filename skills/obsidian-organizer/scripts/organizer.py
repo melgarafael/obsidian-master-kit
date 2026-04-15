@@ -36,7 +36,6 @@ from core.db import connect  # noqa: E402
 from core.paths import resolve_vault  # noqa: E402
 
 WAVE_PLAN = {
-    "cluster": 2,
     "duplicates": 3,
     "moc-audit": 4,
     "area-mismatch": 5,
@@ -44,20 +43,28 @@ WAVE_PLAN = {
     "report": 6,
 }
 
+_CLUSTER_PATH = pathlib.Path(__file__).parent / "cluster.py"
+
 
 def _emit(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
 def _base(cmd: str, vault: pathlib.Path, conn, args) -> dict[str, Any]:
+    """Envelope base. Stubs adicionam wave_pending/planned_for_wave manualmente."""
     return {
         "command": cmd,
         "vault": str(vault),
         "vec_index": "ok" if getattr(conn, "vec_loaded", False) else "fallback",
         "dry_run": bool(getattr(args, "dry_run", True)),
-        "wave_pending": True,
-        "planned_for_wave": WAVE_PLAN[cmd],
     }
+
+
+def _stub_payload(cmd: str, vault: pathlib.Path, conn, args) -> dict[str, Any]:
+    p = _base(cmd, vault, conn, args)
+    p["wave_pending"] = True
+    p["planned_for_wave"] = WAVE_PLAN[cmd]
+    return p
 
 
 def _load_by_path(module_name: str, file_path: pathlib.Path):
@@ -78,29 +85,60 @@ def _load_by_path(module_name: str, file_path: pathlib.Path):
 def cmd_cluster(args) -> int:
     vault = resolve_vault(args.vault)
     conn = connect(vault)
-    payload = _base("cluster", vault, conn, args)
-    payload.update(
-        {
-            "latest": args.latest,
+    cluster = _load_by_path("_organizer_cluster", _CLUSTER_PATH)
+    if args.latest:
+        # Apenas lista clusters do ultimo run persistido, sem re-rodar
+        row = conn.execute(
+            "SELECT run_id FROM clusters ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        if row is None:
+            _emit(
+                _base("cluster", vault, conn, args)
+                | {"latest": True, "clusters": [], "run_id": None,
+                   "note": "Nenhum run persistido ainda. Rode 'cluster' sem --latest."}
+            )
+            return 0
+        run_id = row[0]
+        rows = conn.execute(
+            """
+            SELECT id, label, note_count, proposed_area_id
+            FROM clusters WHERE run_id = ? ORDER BY note_count DESC
+            """,
+            (run_id,),
+        ).fetchall()
+        payload = _base("cluster", vault, conn, args) | {
+            "latest": True,
             "ai_label": args.ai_label,
-            "clusters": [],
-            "note": "Stub Wave 1 — logica real em Wave 2.",
+            "run_id": run_id,
+            "clusters": [
+                {
+                    "id": r[0],
+                    "label": r[1],
+                    "note_count": r[2],
+                    "dominant_area_id": r[3],
+                }
+                for r in rows
+            ],
         }
-    )
+        _emit(payload)
+        return 0
+    result = cluster.run(conn)
+    payload = _base("cluster", vault, conn, args)
+    payload.update({"latest": False, "ai_label": args.ai_label})
+    payload.update(result)
     _emit(payload)
-    return 0
+    return 0 if "error" not in result else 1
 
 
 def cmd_duplicates(args) -> int:
     vault = resolve_vault(args.vault)
     conn = connect(vault)
-    payload = _base("duplicates", vault, conn, args)
+    payload = _stub_payload("duplicates", vault, conn, args)
     payload.update(
         {
             "min_cos": args.min_cos,
             "interactive": args.interactive,
             "candidates": [],
-            "note": "Stub Wave 1 — logica real em Wave 3.",
         }
     )
     _emit(payload)
@@ -110,12 +148,11 @@ def cmd_duplicates(args) -> int:
 def cmd_moc_audit(args) -> int:
     vault = resolve_vault(args.vault)
     conn = connect(vault)
-    payload = _base("moc-audit", vault, conn, args)
+    payload = _stub_payload("moc-audit", vault, conn, args)
     payload.update(
         {
             "create_suggestions": args.create_suggestions,
             "missing_moc": [],
-            "note": "Stub Wave 1 — logica real em Wave 4.",
         }
     )
     _emit(payload)
@@ -125,12 +162,11 @@ def cmd_moc_audit(args) -> int:
 def cmd_area_mismatch(args) -> int:
     vault = resolve_vault(args.vault)
     conn = connect(vault)
-    payload = _base("area-mismatch", vault, conn, args)
+    payload = _stub_payload("area-mismatch", vault, conn, args)
     payload.update(
         {
             "fix": args.fix,
             "mismatches": [],
-            "note": "Stub Wave 1 — logica real em Wave 5.",
         }
     )
     _emit(payload)
@@ -140,13 +176,8 @@ def cmd_area_mismatch(args) -> int:
 def cmd_propose(args) -> int:
     vault = resolve_vault(args.vault)
     conn = connect(vault)
-    payload = _base("propose", vault, conn, args)
-    payload.update(
-        {
-            "batches": [],
-            "note": "Stub Wave 1 — logica real em Wave 6.",
-        }
-    )
+    payload = _stub_payload("propose", vault, conn, args)
+    payload.update({"batches": []})
     _emit(payload)
     return 0
 
@@ -154,13 +185,8 @@ def cmd_propose(args) -> int:
 def cmd_report(args) -> int:
     vault = resolve_vault(args.vault)
     conn = connect(vault)
-    payload = _base("report", vault, conn, args)
-    payload.update(
-        {
-            "summary": {},
-            "note": "Stub Wave 1 — logica real em Wave 6.",
-        }
-    )
+    payload = _stub_payload("report", vault, conn, args)
+    payload.update({"summary": {}})
     _emit(payload)
     return 0
 
