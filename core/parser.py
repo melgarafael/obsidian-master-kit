@@ -20,7 +20,7 @@ from typing import Any
 # ---------- regexes ----------
 
 FRONTMATTER_RE = re.compile(
-    r"\A---\s*\n(.*?)\n---\s*\n?(.*)\Z", re.DOTALL
+    r"\A---\s*\n(.*?)^---\s*$\n?(.*)\Z", re.DOTALL | re.MULTILINE
 )
 
 # Wiki-link com alias opcional: [[Target]] ou [[Target|Alias]].
