@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <title>obsidian-pulse</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cal-heatmap@4/dist/cal-heatmap.css">
+  <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+  <script src="https://cdn.jsdelivr.net/npm/cal-heatmap@4/dist/cal-heatmap.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 0; padding: 0;
+      background: #f6f7f9;
+      color: #222;
+    }
+    header {
+      background: #1a1a1a; color: #fafafa;
+      padding: 16px 24px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    header h1 { margin: 0; font-size: 18px; font-weight: 600; }
+    header .muted { color: #888; font-size: 13px; }
+    nav.tabs {
+      background: #fff; border-bottom: 1px solid #e2e4e8;
+      padding: 0 24px; display: flex; gap: 4px;
+      overflow-x: auto;
+    }
+    nav.tabs button {
+      padding: 12px 16px; border: 0; background: transparent; cursor: pointer;
+      border-bottom: 2px solid transparent; font-size: 14px;
+      color: #555;
+    }
+    nav.tabs button.active {
+      color: #1a1a1a; border-bottom-color: #3b82f6; font-weight: 600;
+    }
+    main { padding: 24px; max-width: 1200px; margin: 0 auto; }
+    .card {
+      background: #fff; border: 1px solid #e2e4e8; border-radius: 8px;
+      padding: 16px; margin-bottom: 12px;
+    }
+    .card h3 { margin: 0 0 8px; font-size: 15px; }
+    .card .reasoning { color: #666; font-size: 13px; font-style: italic; margin: 8px 0; }
+    .card .actions { margin-top: 8px; display: flex; gap: 8px; }
+    .card button {
+      padding: 6px 12px; border: 1px solid #d1d5db; border-radius: 6px;
+      background: #fff; cursor: pointer; font-size: 12px;
+    }
+    .card button.accept { background: #ecfdf5; color: #065f46; border-color: #a7f3d0; }
+    .card button.dismiss { background: #fef2f2; color: #991b1b; border-color: #fecaca; }
+    .alert-warn { border-left: 3px solid #f59e0b; }
+    .alert-info { border-left: 3px solid #3b82f6; }
+    .empty { color: #888; padding: 32px; text-align: center; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+    #cal-heatmap { margin-top: 16px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>obsidian-pulse</h1>
+    <span class="muted" id="status-line">carregando…</span>
+  </header>
+
+  <nav class="tabs">
+    <button class="active" data-tab="hoje">Hoje</button>
+    <button data-tab="pulso">Pulso</button>
+    <button data-tab="grafo">Grafo</button>
+    <button data-tab="saude">Saude</button>
+    <button data-tab="descobrir">Descobrir</button>
+    <button data-tab="insights">Insights</button>
+  </nav>
+
+  <main>
+    <section id="tab-hoje" class="tab-content">
+      <h2 style="margin-top:0">Sugestoes de hoje</h2>
+      <div id="suggestions" class="grid"></div>
+      <h2>Alertas</h2>
+      <div id="alerts"></div>
+    </section>
+
+    <section id="tab-pulso" class="tab-content" hidden>
+      <h2 style="margin-top:0">Heatmap de atividade</h2>
+      <div id="cal-heatmap"></div>
+    </section>
+
+    <section id="tab-grafo" class="tab-content" hidden>
+      <h2 style="margin-top:0">Grafo de notas</h2>
+      <p class="empty">Visualizacao D3-force simplificada. Explorar graph completo na UI do Obsidian.</p>
+    </section>
+
+    <section id="tab-saude" class="tab-content" hidden>
+      <h2 style="margin-top:0">Saude do vault</h2>
+      <div id="saude-content" class="empty">Queries de saude via endpoints dedicados — extensao futura.</div>
+    </section>
+
+    <section id="tab-descobrir" class="tab-content" hidden>
+      <h2 style="margin-top:0">Descobrir</h2>
+      <p class="empty">Busca semantica via /api/suggestions?kind=bridge.</p>
+    </section>
+
+    <section id="tab-insights" class="tab-content" hidden>
+      <h2 style="margin-top:0">Insights</h2>
+      <div id="insights"></div>
+    </section>
+  </main>
+
+  <script>
+    const urlToken = new URLSearchParams(window.location.search).get("token");
+    const token = urlToken || localStorage.getItem("pulseToken") || "";
+    if (urlToken) localStorage.setItem("pulseToken", urlToken);
+
+    const authHeader = { "X-Pulse-Token": token };
+
+    async function api(path, method) {
+      const r = await fetch(path, { method: method || "GET", headers: authHeader });
+      if (!r.ok) throw new Error("API " + r.status);
+      return r.json();
+    }
+
+    function clearNode(el) { while (el.firstChild) el.removeChild(el.firstChild); }
+
+    function makeCard(titleText, reasoningText, opts) {
+      opts = opts || {};
+      const card = document.createElement("div");
+      card.className = "card" + (opts.extraClass ? " " + opts.extraClass : "");
+      const h3 = document.createElement("h3");
+      h3.textContent = titleText;
+      card.appendChild(h3);
+      if (reasoningText) {
+        const d = document.createElement("div");
+        d.className = "reasoning";
+        d.textContent = reasoningText;
+        card.appendChild(d);
+      }
+      if (opts.acceptId || opts.dismissId) {
+        const actions = document.createElement("div");
+        actions.className = "actions";
+        if (opts.acceptId) {
+          const b = document.createElement("button");
+          b.className = "accept";
+          b.textContent = "Aceitar";
+          b.addEventListener("click", () => acceptSuggestion(opts.acceptId));
+          actions.appendChild(b);
+        }
+        if (opts.dismissId) {
+          const b = document.createElement("button");
+          b.className = "dismiss";
+          b.textContent = "Dispensar";
+          b.addEventListener("click", () => dismissSuggestion(opts.dismissId));
+          actions.appendChild(b);
+        }
+        card.appendChild(actions);
+      }
+      return card;
+    }
+
+    function makeEmptyNode(text) {
+      const d = document.createElement("div");
+      d.className = "empty";
+      d.textContent = text;
+      return d;
+    }
+
+    async function loadStatus() {
+      try {
+        const s = await api("/api/status");
+        document.getElementById("status-line").textContent =
+          s.notes_active + " notas ativas";
+      } catch (e) {
+        document.getElementById("status-line").textContent = "erro: token invalido?";
+      }
+    }
+
+    async function loadSuggestions() {
+      const el = document.getElementById("suggestions");
+      clearNode(el);
+      try {
+        const data = await api("/api/suggestions?limit=5");
+        if (!data.suggestions.length) {
+          el.appendChild(makeEmptyNode("Nenhuma sugestao agora. Rode 'pulse refresh'."));
+          return;
+        }
+        for (const s of data.suggestions) {
+          el.appendChild(makeCard(s.content, s.reasoning, {
+            acceptId: s.id, dismissId: s.id,
+          }));
+        }
+      } catch (e) {
+        el.appendChild(makeEmptyNode("Falha ao carregar sugestoes."));
+      }
+    }
+
+    async function loadAlerts() {
+      const el = document.getElementById("alerts");
+      clearNode(el);
+      try {
+        const data = await api("/api/alerts");
+        if (!data.alerts.length) {
+          el.appendChild(makeEmptyNode("Sem alertas."));
+          return;
+        }
+        for (const a of data.alerts) {
+          el.appendChild(makeCard(a.content, a.reasoning, {
+            extraClass: "alert-" + a.severity,
+          }));
+        }
+      } catch (e) { /* silencioso */ }
+    }
+
+    async function loadInsights() {
+      const el = document.getElementById("insights");
+      clearNode(el);
+      try {
+        const data = await api("/api/insights");
+        if (!data.insights.length) {
+          el.appendChild(makeEmptyNode("Sem padroes detectados ainda."));
+          return;
+        }
+        for (const i of data.insights) {
+          el.appendChild(makeCard(i.title, i.body));
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    async function loadHeatmap() {
+      const el = document.getElementById("cal-heatmap");
+      clearNode(el);
+      try {
+        const data = await api("/api/heatmap?days=365");
+        if (typeof CalHeatmap === "undefined") {
+          el.textContent = "cal-heatmap nao carregou (CDN offline?)";
+          return;
+        }
+        const cal = new CalHeatmap();
+        cal.paint({
+          itemSelector: "#cal-heatmap",
+          domain: { type: "month" },
+          subDomain: { type: "day" },
+          data: { source: data.days, x: "date", y: "count" },
+          range: 12,
+        });
+      } catch (e) { /* ignore */ }
+    }
+
+    async function acceptSuggestion(id) {
+      await api("/api/accept/" + id, "POST");
+      loadSuggestions();
+    }
+
+    async function dismissSuggestion(id) {
+      await api("/api/dismiss/" + id, "POST");
+      loadSuggestions();
+    }
+
+    function switchTab(name) {
+      document.querySelectorAll(".tab-content").forEach(t => t.hidden = true);
+      document.querySelectorAll("nav.tabs button").forEach(b => b.classList.remove("active"));
+      document.getElementById("tab-" + name).hidden = false;
+      document.querySelector('nav.tabs button[data-tab="' + name + '"]').classList.add("active");
+      if (name === "pulso") loadHeatmap();
+      if (name === "insights") loadInsights();
+    }
+
+    document.querySelectorAll("nav.tabs button").forEach(b => {
+      b.addEventListener("click", () => switchTab(b.dataset.tab));
+    });
+
+    loadStatus();
+    loadSuggestions();
+    loadAlerts();
+  </script>
+</body>
+</html>

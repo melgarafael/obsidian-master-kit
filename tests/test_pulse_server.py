@@ -159,3 +159,25 @@ def test_dashboard_root_retorna_html(app_client):
     r = client.get("/")
     assert r.status_code == 200
     assert "obsidian-pulse" in r.text.lower()
+
+
+def test_dashboard_tem_6_tabs(app_client):
+    client, _ = app_client
+    r = client.get("/")
+    body = r.text
+    for tab in ("hoje", "pulso", "grafo", "saude", "descobrir", "insights"):
+        assert f'data-tab="{tab}"' in body
+
+
+def test_dashboard_usa_cal_heatmap(app_client):
+    client, _ = app_client
+    r = client.get("/")
+    assert "cal-heatmap" in r.text
+    assert "CalHeatmap" in r.text
+
+
+def test_dashboard_nao_usa_innerHTML(app_client):
+    """Anti-XSS: garantir que nao tem innerHTML (so textContent + DOM API)."""
+    client, _ = app_client
+    r = client.get("/")
+    assert "innerHTML" not in r.text
