@@ -35,21 +35,46 @@ navegável, linkado e coerente.
 
 ## Instalação
 
-### Via plugin install (recomendado)
+Claude Code gerencia plugins via sistema de marketplaces. Qualquer repo GitHub pode
+ser adicionado como marketplace customizado — não é necessário estar no marketplace
+oficial da Anthropic. Este repo já traz o `.claude-plugin/marketplace.json`
+declarando-se como marketplace de 1 plugin.
 
-```bash
-# No Claude Code:
-/plugin install melgarafael/obsidian-master-kit
+### Fluxo canônico (2 comandos dentro do Claude Code)
+
+```
+/plugin marketplace add melgarafael/obsidian-master-kit
+/plugin install obsidian-master-kit@obsidian-master-kit
 ```
 
-### Clone manual
+Primeiro comando registra o repo como fonte. Segundo instala o plugin dali. O
+Claude Code cacheia em `~/.claude/plugins/cache/<marketplace-name>/<plugin>/<version>/`
+e registra em `~/.claude/plugins/installed_plugins.json`.
 
-```bash
-git clone https://github.com/melgarafael/obsidian-master-kit \
-  ~/.claude/plugins/obsidian-master-kit
+### Instalação em modo desenvolvimento (local)
+
+Para hackear o plugin localmente sem passar pelo GitHub:
+
+```
+/plugin marketplace add /caminho/local/para/obsidian-master-kit
+/plugin install obsidian-master-kit@obsidian-master-kit
 ```
 
-Depois reinicie o Claude Code para o plugin ser detectado.
+O source `source: "directory"` no `known_marketplaces.json` aponta direto pro
+diretório local, então mudanças refletem sem commit/push.
+
+### Estrutura esperada pelo Claude Code
+
+```
+repo-root/
+├── .claude-plugin/
+│   ├── marketplace.json    # declara o repo como marketplace
+│   └── plugin.json         # manifest do plugin (hooks, metadata)
+├── skills/
+├── hooks/
+├── commands/
+└── ...
+```
 
 ---
 

@@ -28,63 +28,55 @@ Tudo em português. Você não precisa saber nada sobre Obsidian pra começar.
 
 ## O que você vai precisar antes
 
-Três coisas, nada mais:
+Duas coisas, nada mais:
 
 1. **[Claude Code](https://claude.com/claude-code) instalado** no seu computador
    (Mac, Windows ou Linux).
 2. **[Obsidian](https://obsidian.md) instalado** — é grátis.
-3. **[Git](https://git-scm.com) instalado** pra baixar o kit. Se você não tem,
-   baixa lá no site (também grátis).
 
-Se você já tem os três, pula pra instalação.
+Se você já tem os dois, pula pra instalação.
 
 ---
 
-## Instalação em 3 passos
+## Instalação em 2 passos
 
-### Passo 1 — Baixe o kit pro lugar certo
+A instalação é feita **dentro do próprio Claude Code**, usando o sistema de
+plugins dele. Você não precisa clonar nada no terminal, nem saber onde os
+arquivos vão parar — o Claude Code cuida de tudo.
 
-Abra o **Terminal** (no Mac, é o app "Terminal"; no Windows, é o "PowerShell"; no
-Linux, qualquer terminal). Cole o comando abaixo **exatamente como está** e aperte
-Enter:
+### Passo 1 — Adicione o kit como "fonte" (marketplace) do seu Claude Code
 
-```bash
-git clone https://github.com/melgarafael/obsidian-master-kit ~/.claude/plugins/obsidian-master-kit
+Dentro do Claude Code, digite:
+
+```
+/plugin marketplace add melgarafael/obsidian-master-kit
 ```
 
-O que isso faz: baixa o kit e coloca ele dentro da pasta onde o Claude Code procura
-por plugins. Você não precisa saber onde fica — o comando já cuida disso.
+O que isso faz: diz pro seu Claude Code "olha, esse repositório do GitHub tem
+plugins que você pode instalar". É uma só vez — depois disso, o Claude Code sabe
+onde achar o kit.
 
-### Passo 2 — Reinicie o Claude Code
+### Passo 2 — Instale o plugin
 
-Fecha o Claude Code completamente e abre de novo. Isso faz ele perceber que tem um
-plugin novo instalado.
+Ainda dentro do Claude Code:
 
-### Passo 3 — Confirme que funcionou
+```
+/plugin install obsidian-master-kit@obsidian-master-kit
+```
 
-Dentro do Claude Code, digita `/` e veja se aparece na lista:
+Pronto. O Claude Code baixa o plugin, registra as skills, commands e hook. Em
+alguns segundos os comandos já aparecem no autocomplete.
+
+### Confirmando que funcionou
+
+Digite `/` no Claude Code e veja se aparecem na lista:
 
 - `/obsidian-master-kit:init`
 - `/obsidian-master-kit:sync`
 
-Se aparecer, **você já instalou**. Pula pro próximo bloco.
+Se aparecerem, **tá instalado**. Pula pro próximo bloco.
 
-Se **não apareceu**, vai pra seção [Problemas comuns](#problemas-comuns) mais
-abaixo.
-
----
-
-## Atalho — se o seu Claude Code tem `/plugin install`
-
-Em algumas versões do Claude Code você pode instalar mais rápido ainda. Dentro do
-Claude Code, digita:
-
-```
-/plugin install melgarafael/obsidian-master-kit
-```
-
-Se funcionar, ótimo — pula o Passo 1 e 2. Se o comando der erro ou o Claude Code
-não reconhecer, volta pra instalação em 3 passos acima (sempre funciona).
+Se **não apareceram**, vai pra seção [Problemas comuns](#problemas-comuns).
 
 ---
 
@@ -209,14 +201,20 @@ já existe. Mas ainda assim, antes de rodar em vault que você já usa, faz um
 
 ### Não gostei. Como apago?
 
-Duas linhas no Terminal:
+Dentro do Claude Code, roda:
 
-```bash
-rm -rf ~/.claude/plugins/obsidian-master-kit
+```
+/plugin uninstall obsidian-master-kit
 ```
 
 Isso remove o kit. Sua pasta do Obsidian **continua intacta** — ela é só uma
 pasta de arquivos de texto, independe do kit.
+
+Se quiser também tirar a "fonte" do Claude Code:
+
+```
+/plugin marketplace remove obsidian-master-kit
+```
 
 ### Posso personalizar as pastas e regras?
 
@@ -233,30 +231,23 @@ dentro do vault — é o marcador que diz "esse vault tem o kit ativo".
 
 Três coisas pra checar, em ordem:
 
-1. **Você reiniciou o Claude Code** depois de clonar? Fecha completamente (não só
-   minimiza) e abre de novo.
-2. **O clone foi pra pasta certa?** Roda no Terminal:
+1. **A instalação terminou de verdade?** Dentro do Claude Code, roda
+   `/plugin list`. Se `obsidian-master-kit` aparece na lista, está instalado. Se
+   não aparece, o `/plugin install` falhou — repete a instalação.
+2. **Você adicionou o marketplace primeiro?** O comando
+   `/plugin marketplace add melgarafael/obsidian-master-kit` precisa ter rodado
+   **antes** do install. Se pulou, volta ao Passo 1.
+3. **Seu Claude Code é recente o suficiente?** O sistema de plugins é
+   relativamente novo. Atualiza pra versão mais recente e tenta de novo.
 
-   ```bash
-   ls ~/.claude/plugins/obsidian-master-kit
-   ```
+### Erros comuns na instalação
 
-   Se aparecer uma lista de arquivos (`README.md`, `skills/`, etc.), o kit está
-   instalado. Se der erro "No such file or directory", o clone não foi pro lugar
-   certo — volte ao Passo 1 da instalação.
-3. **Seu Claude Code é recente o suficiente?** Plugins são uma funcionalidade
-   relativamente nova. Atualiza pro mais recente e tenta de novo.
-
-### "Git deu erro"
-
-- **"command not found: git"** → git não está instalado. Baixa em
-  https://git-scm.com.
-- **"Permission denied"** → provavelmente você está numa pasta onde não pode
-  escrever. Tenta rodar o comando em outra pasta (o terminal aceita `cd ~` pra
-  ir pra sua home).
-- **"fatal: destination path ... already exists"** → você já instalou o kit uma
-  vez. Se quer reinstalar do zero, apaga primeiro:
-  `rm -rf ~/.claude/plugins/obsidian-master-kit`.
+- **"marketplace not found"** → o comando `/plugin marketplace add` não chegou a
+  ser executado. Roda ele antes do install.
+- **"plugin already installed"** → você já instalou uma vez. Se quer reinstalar
+  do zero, roda `/plugin uninstall obsidian-master-kit` primeiro.
+- **"network error"** → verifique sua conexão e tente novamente. O Claude Code
+  precisa baixar do GitHub.
 
 ### "O Obsidian não abre minha pasta"
 

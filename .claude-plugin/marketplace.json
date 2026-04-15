@@ -1,0 +1,33 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "obsidian-master-kit",
+  "description": "Kit de skills que transforma uma pasta vazia num vault Obsidian profissional — segundo cerebro + memoria persistente para IA. pt-br.",
+  "owner": {
+    "name": "Rafael Melgaco",
+    "email": "rafael@maudibrasil.com.br"
+  },
+  "plugins": [
+    {
+      "name": "obsidian-master-kit",
+      "description": "Scaffolda um vault Obsidian completo via entrevista pt-br e mantem curadoria automatica (valida frontmatter, normaliza tags, atualiza _INDEX.md vivo). Inclui 2 skills (obsidian-init, obsidian-librarian), 2 slash commands e hook PostToolUse.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Rafael Melgaco"
+      },
+      "source": "./",
+      "category": "productivity",
+      "homepage": "https://github.com/melgarafael/obsidian-master-kit",
+      "repository": "https://github.com/melgarafael/obsidian-master-kit",
+      "license": "MIT",
+      "keywords": [
+        "obsidian",
+        "second-brain",
+        "knowledge-management",
+        "ai-memory",
+        "pt-br",
+        "markdown",
+        "zettelkasten"
+      ]
+    }
+  ]
+}
