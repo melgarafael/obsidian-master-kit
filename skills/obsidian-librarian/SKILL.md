@@ -1,6 +1,6 @@
 ---
 name: obsidian-librarian
-description: Esta skill deve ser usada sempre que alguma skill (ou humano) escrever, editar ou adicionar notas dentro de um vault obsidian-master-kit. Tambem e invocada automaticamente pelo hook PostToolUse do plugin depois de qualquer Write/Edit em paths dentro de um vault. Le o CLAUDE.md do vault como memoria, valida o frontmatter das notas recem-modificadas, normaliza tags, garante wiki-link para o MOC da area, reescreve o _INDEX.md vivo e reporta desvios que exigem decisao humana. NAO deleta conteudo humano. NAO edita o CLAUDE.md.
+description: Esta skill deve ser usada quando o usuario diz "sincroniza o vault", "roda o bibliotecario", "atualiza o indice do Obsidian", "valida as notas que acabei de escrever", ou invoca /obsidian-master-kit:sync. Tambem e acionada automaticamente apos qualquer Write/Edit dentro de um vault obsidian-master-kit (via hook PostToolUse). Le o CLAUDE.md do vault como memoria, valida frontmatter, normaliza tags, garante wiki-link para o MOC da area, reescreve _INDEX.md vivo e reporta desvios que exigem decisao humana. NAO deleta conteudo humano. NAO edita o CLAUDE.md do vault.
 ---
 
 # obsidian-librarian
@@ -12,7 +12,7 @@ do vault), valida o que foi escrito, corrige o que e deterministico, e mantem o
 ## Quando usar
 
 - Apos qualquer `Write` ou `Edit` em path dentro de um vault-master (disparo
-  automatico via hook `post-vault-write.sh`).
+  automatico via hook `post-vault-write.py`).
 - Quando o usuario invoca `/obsidian-master-kit:sync`.
 - Quando o usuario diz "atualiza o indice", "roda o bibliotecario", "sincroniza o
   vault".
@@ -87,7 +87,8 @@ Para cada categoria:
 - **orphans**: consulte as referencias (em `references/linking-rules.md`) sobre como
   sugerir um MOC. Adicione linha em `## Relacionado` da nota apontando para o MOC da
   area. Se a nota nao cabe em nenhuma area existente, escale para o usuario.
-- **missing_frontmatter_fields**: adicione os campos faltando com defaults razoaveis:
+- **missing_frontmatter_fields**: adicione os campos faltando seguindo os defaults
+  de `references/frontmatter-schema.md`:
   - `status` ausente → `draft`
   - `tags` ausente → `[]`
   - `updated` ausente → data de hoje (mas o script ja faz isso)

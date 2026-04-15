@@ -1,6 +1,6 @@
 ---
 name: obsidian-init
-description: Esta skill deve ser usada quando o usuario quer iniciar um vault Obsidian do zero, criar um segundo cerebro, gerar a estrutura de pastas opinionada do obsidian-master-kit, ou quando ele invoca /obsidian-master-kit:init. Conduz uma entrevista curta em pt-br (nome, profissao, areas, projetos, fuso, tom) e scaffolda um vault completo com 4 areas (Pessoal, Profissional, Pesquisas, Memoria da IA), CLAUDE.md doutrina, _INDEX.md vivo, MOCs e templates. Idempotente: nunca sobrescreve arquivos existentes. Nao executar sem explicita intencao do usuario de criar um vault Obsidian.
+description: Esta skill deve ser usada quando o usuario quer iniciar um vault Obsidian do zero, criar um segundo cerebro, gerar a estrutura de pastas opinionada do obsidian-master-kit, ou quando ele invoca /obsidian-master-kit:init. Conduz uma entrevista curta em pt-br (nome, profissao, areas, projetos, fuso, tom) e scaffolda um vault completo com doutrina CLAUDE.md, _INDEX.md vivo, MOCs e templates. Idempotente: nunca sobrescreve arquivos existentes. Nao executar sem explicita intencao do usuario de criar um vault Obsidian.
 ---
 
 # obsidian-init
