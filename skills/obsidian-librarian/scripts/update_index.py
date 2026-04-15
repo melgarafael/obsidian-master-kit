@@ -318,35 +318,37 @@ def detect_issues(rec: NoteRecord) -> dict:
 
 # ---------- index rewrite ----------
 
-def build_index(vault: pathlib.Path, records: list[NoteRecord], today: str) -> str:
-    by_area: dict[str, list[NoteRecord]] = {a: [] for a in CANONICAL_AREAS}
-    mocs: list[NoteRecord] = []
-    for r in records:
-        if r.path.name == MOC_FILENAME:
-            mocs.append(r)
-        area = r.frontmatter.get("area") or infer_area_from_path(r.rel)
-        if area in by_area:
-            by_area[area].append(r)
+# Ordem canonica das 4 areas — usada tanto pelo caminho filesystem quanto DB.
+_CANONICAL_AREAS_ORDERED = ("pessoal", "profissional", "pesquisa", "ai-memory")
+_AREA_LABELS = {
+    "pessoal": "Pessoal",
+    "profissional": "Profissional",
+    "pesquisa": "Pesquisas",
+    "ai-memory": "Memória da IA",
+}
+# Inverso de AREA_FOLDER_MAP — slug canonico -> prefixo de path.
+_AREA_SLUG_TO_FOLDER = {v: k for k, v in AREA_FOLDER_MAP.items()}
 
-    # Last 10 modified (excluding structural meta files)
-    relevant = [r for r in records if r.path.name not in STRUCTURAL_FILES]
-    recent = sorted(relevant, key=lambda r: r.mtime, reverse=True)[:10]
 
-    # Orphans (ignore structural files and MOCs — those are expected to vary)
-    orphans = [
-        r for r in records
-        if not r.outgoing_links
-        and r.path.name not in STRUCTURAL_FILES
-        and r.path.name != MOC_FILENAME
-    ]
+def _format_index(
+    today: str,
+    counts: dict[str, tuple[int, int]],
+    recent: list[tuple[str, str, float]],
+    mocs: list[tuple[str, str]],
+    orphans: list[tuple[str, str]],
+    projects: list[tuple[str, str]],
+) -> str:
+    """Serializa _INDEX.md a partir dos dados ja agregados.
 
-    # Project files
-    projects = [
-        r for r in records
-        if r.rel.parts[:2] == ("01 - Profissional", "Projetos")
-        and r.path.name != MOC_FILENAME
-    ]
+    Shape dos parametros (estavel entre as 2 implementacoes filesystem/DB):
+    - counts: {slug: (note_count, moc_count)}
+    - recent: [(rel_no_ext, display_name, mtime), ...] — ja ordenado desc
+    - mocs:   [(rel_no_ext, folder_label), ...]        — ja ordenado alfabetico
+    - orphans:[(rel_no_ext, display_name), ...]        — ordem de iteracao
+    - projects:[(rel_no_ext, display_name), ...]       — ordem de iteracao
 
+    Qualquer mudanca de formato aqui afeta ambos os caminhos igualmente.
+    """
     lines: list[str] = []
     lines.append("---")
     lines.append(f"created: {today}")
@@ -376,22 +378,17 @@ def build_index(vault: pathlib.Path, records: list[NoteRecord], today: str) -> s
     lines.append("")
     lines.append("| Área | Notas | MOCs |")
     lines.append("|---|---|---|")
-    for area in ("pessoal", "profissional", "pesquisa", "ai-memory"):
-        notes = by_area[area]
-        moc_count = sum(1 for n in notes if n.path.name == MOC_FILENAME)
-        note_count = len(notes) - moc_count
-        label = {"pessoal": "Pessoal", "profissional": "Profissional",
-                 "pesquisa": "Pesquisas", "ai-memory": "Memória da IA"}[area]
-        lines.append(f"| {label} | {note_count} | {moc_count} |")
+    for slug in _CANONICAL_AREAS_ORDERED:
+        note_count, moc_count = counts.get(slug, (0, 0))
+        lines.append(f"| {_AREA_LABELS[slug]} | {note_count} | {moc_count} |")
     lines.append("")
 
     lines.append("## Últimas 10 adições")
     lines.append("")
     if recent:
-        for r in recent:
-            display_name = r.path.stem
-            lines.append(f"- [[{r.rel.with_suffix('')}|{display_name}]] "
-                         f"— {_dt.datetime.fromtimestamp(r.mtime).strftime('%Y-%m-%d')}")
+        for rel_no_ext, display_name, mtime in recent:
+            lines.append(f"- [[{rel_no_ext}|{display_name}]] "
+                         f"— {_dt.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d')}")
     else:
         lines.append("_(Vazio ainda.)_")
     lines.append("")
@@ -399,10 +396,8 @@ def build_index(vault: pathlib.Path, records: list[NoteRecord], today: str) -> s
     lines.append("## MOCs ativos")
     lines.append("")
     if mocs:
-        for m in sorted(mocs, key=lambda r: str(r.rel)):
-            rel_no_ext = m.rel.with_suffix("")
-            label = str(m.rel.parent) if str(m.rel.parent) != "." else "root"
-            lines.append(f"- [[{rel_no_ext}|MOC — {label}]]")
+        for rel_no_ext, folder_label in mocs:
+            lines.append(f"- [[{rel_no_ext}|MOC — {folder_label}]]")
     else:
         lines.append("_(Nenhum MOC encontrado.)_")
     lines.append("")
@@ -410,8 +405,8 @@ def build_index(vault: pathlib.Path, records: list[NoteRecord], today: str) -> s
     lines.append("## Notas órfãs (sem wiki-links de saída)")
     lines.append("")
     if orphans:
-        for o in orphans:
-            lines.append(f"- [[{o.rel.with_suffix('')}|{o.path.stem}]]  ⚠️")
+        for rel_no_ext, display_name in orphans:
+            lines.append(f"- [[{rel_no_ext}|{display_name}]]  ⚠️")
     else:
         lines.append("_(Nenhuma.)_")
     lines.append("")
@@ -419,14 +414,310 @@ def build_index(vault: pathlib.Path, records: list[NoteRecord], today: str) -> s
     lines.append("## Projetos ativos")
     lines.append("")
     if projects:
-        for p in projects:
-            rel_no_ext = p.rel.with_suffix("")
-            lines.append(f"- [[{rel_no_ext}|{p.path.stem}]]")
+        for rel_no_ext, display_name in projects:
+            lines.append(f"- [[{rel_no_ext}|{display_name}]]")
     else:
         lines.append("_(Nenhum projeto ativo cadastrado.)_")
     lines.append("")
 
     return "\n".join(lines)
+
+
+def _build_index_filesystem(
+    vault: pathlib.Path, records: list[NoteRecord], today: str,
+) -> str:
+    """Versao legada: agrega a partir da lista de NoteRecord do scan_vault.
+
+    Usada em vaults v0.1.1 (sem DB). Preserva comportamento bit-identico ao
+    pre-wave-3.
+    """
+    by_area: dict[str, list[NoteRecord]] = {a: [] for a in CANONICAL_AREAS}
+    mocs_records: list[NoteRecord] = []
+    for r in records:
+        if r.path.name == MOC_FILENAME:
+            mocs_records.append(r)
+        area = r.frontmatter.get("area") or infer_area_from_path(r.rel)
+        if area in by_area:
+            by_area[area].append(r)
+
+    counts: dict[str, tuple[int, int]] = {}
+    for slug in _CANONICAL_AREAS_ORDERED:
+        bucket = by_area[slug]
+        moc_count = sum(1 for n in bucket if n.path.name == MOC_FILENAME)
+        note_count = len(bucket) - moc_count
+        counts[slug] = (note_count, moc_count)
+
+    # Sort com tie-breaker alfabetico pra determinismo (parity com DB version,
+    # e imune a ordem de rglob variar entre FS/OS).
+    relevant = [r for r in records if r.path.name not in STRUCTURAL_FILES]
+    recent_records = sorted(relevant, key=lambda r: (-r.mtime, str(r.rel)))[:10]
+    recent = [
+        (str(r.rel.with_suffix("")), r.path.stem, r.mtime)
+        for r in recent_records
+    ]
+
+    mocs_sorted = sorted(mocs_records, key=lambda r: str(r.rel))
+    mocs = [
+        (
+            str(m.rel.with_suffix("")),
+            str(m.rel.parent) if str(m.rel.parent) != "." else "root",
+        )
+        for m in mocs_sorted
+    ]
+
+    orphan_records = [
+        r for r in records
+        if not r.outgoing_links
+        and r.path.name not in STRUCTURAL_FILES
+        and r.path.name != MOC_FILENAME
+    ]
+    orphans = [
+        (str(r.rel.with_suffix("")), r.path.stem)
+        for r in sorted(orphan_records, key=lambda r: str(r.rel))
+    ]
+
+    project_records = [
+        r for r in records
+        if r.rel.parts[:2] == ("01 - Profissional", "Projetos")
+        and r.path.name != MOC_FILENAME
+    ]
+    projects = [
+        (str(r.rel.with_suffix("")), r.path.stem)
+        for r in sorted(project_records, key=lambda r: str(r.rel))
+    ]
+
+    return _format_index(today, counts, recent, mocs, orphans, projects)
+
+
+def _build_index_db(vault: pathlib.Path, conn, today: str) -> str:
+    """Versao DB-backed: agrega via queries diretas em notes/areas/links.
+
+    PRIVACIDADE (doutrina Q4, wave 3):
+    - Notes com `sensitive=1`: EXCLUIDAS de "Ultimas 10", "Orfas", "Projetos
+      ativos" (listagens title-visible). Mantidas em "Contagem por area"
+      (agregado, sem titulo vazando).
+    - Areas com `sensitive=1`: linha da area zera contagem na tabela (bias:
+      esconder informacao quantitativa mas manter a estrutura canonica das 4
+      areas, pq o _format_index espera essas 4 linhas). Se wave 4+ decidir
+      ocultar a linha inteira, _format_index precisa aceitar areas dinamicas.
+    - MOCs: sempre incluidos. Sao estruturais/publicos por design.
+
+    AREA BUCKETING: replica a logica do filesystem version — frontmatter.area
+    (se canonico) tem precedencia sobre path inference. Motivo: parity
+    bit-identica com vaults que usam slugs nao-canonicos no frontmatter (ex:
+    `memoria-ia` em vez de `ai-memory`). O filesystem version dropa essas
+    notas do by_area bucket; a DB version precisa fazer igual.
+
+    Performance: 4 queries pequenas, uma unica leitura (sqlite3 autocommit,
+    sem begin implicito de write txn). Target <200ms em 2k notas.
+    `idx_notes_mtime` cobre o ORDER BY da query de recentes.
+    """
+    # -- schema introspection: detecta se coluna `sensitive`/`pagerank`
+    # existe (v0.1.1 DBs pre-migration 001 podem nao ter). Ausente => 0.
+    note_cols = {row[1] for row in conn.execute("PRAGMA table_info(notes)")}
+    area_cols = {row[1] for row in conn.execute("PRAGMA table_info(areas)")}
+    note_sensitive_expr = "n.sensitive" if "sensitive" in note_cols else "0"
+    has_pagerank = "pagerank" in note_cols
+
+    # -- set de areas sensitive (linha zerada na tabela de contagem)
+    sensitive_area_folders: set[str] = set()
+    if "sensitive" in area_cols:
+        for row in conn.execute(
+            "SELECT folder FROM areas WHERE sensitive = 1 AND folder IS NOT NULL"
+        ):
+            if row[0]:
+                sensitive_area_folders.add(row[0])
+
+    # -- Carrega todas as notas ativas (path, frontmatter_json). Replicar
+    # bucketing filesystem-style (frontmatter.area CANONICAL > path inference)
+    # em SQL puro nao daria pra suportar sem duplicar o parser; iterar em
+    # Python e aceitavel pro scale alvo (<5k notas). Uma query single-pass.
+    all_rows = conn.execute(
+        """
+        SELECT path, frontmatter_json FROM notes
+        WHERE deleted_at IS NULL
+          AND path NOT LIKE '%/_templates/%'
+        """
+    ).fetchall()
+
+    counts: dict[str, tuple[int, int]] = {s: (0, 0) for s in _CANONICAL_AREAS_ORDERED}
+    for path, fm_json in all_rows:
+        basename = path.rsplit("/", 1)[-1] if "/" in path else path
+        # Replica EXATAMENTE a logica filesystem (quirk incluso):
+        #   area = frontmatter.get("area") or infer_area_from_path(rel)
+        # O `or` do Python faz short-circuit em truthy. Se frontmatter tem
+        # `area: memoria-ia` (nao canonico, mas truthy), path inference nao
+        # dispara, e a nota nao entra em nenhum bucket canonico. Preservado
+        # aqui pra byte-parity; Epic 02 (migrate) deve corrigir o frontmatter
+        # dessas notas.
+        fm_area: str | None = None
+        if fm_json:
+            try:
+                fm = json.loads(fm_json)
+                v = fm.get("area")
+                if isinstance(v, str) and v:
+                    fm_area = v
+            except (json.JSONDecodeError, TypeError):
+                pass
+        if fm_area:
+            area = fm_area  # short-circuit — mesmo que invalido
+        else:
+            first = path.split("/", 1)[0] if "/" in path else ""
+            area = AREA_FOLDER_MAP.get(first)
+        if area not in _CANONICAL_AREAS_ORDERED:
+            continue  # sem bucket canonico — nao conta (parity com filesystem)
+        folder = _AREA_SLUG_TO_FOLDER[area]
+        if folder in sensitive_area_folders:
+            continue  # area sensitive: contagem suprimida (mantem (0,0))
+        note_count, moc_count = counts[area]
+        if basename == MOC_FILENAME:
+            moc_count += 1
+        else:
+            note_count += 1
+        counts[area] = (note_count, moc_count)
+
+    # -- Ultimas 10 adicoes: mtime DESC, path ASC (tie-breaker deterministico).
+    # Exclui structural files (basename match) + sensitive. MOCs podem
+    # aparecer (parity com filesystem).
+    structural_filter = " AND ".join(
+        f"substr(n.path, -{len(name) + 1}) != '/{name}' AND n.path != '{name}'"
+        for name in STRUCTURAL_FILES
+    )
+    recent_rows = conn.execute(
+        f"""
+        SELECT n.path, n.mtime
+        FROM notes n
+        WHERE n.deleted_at IS NULL
+          AND {note_sensitive_expr} = 0
+          AND {structural_filter}
+          AND n.path NOT LIKE '%/_templates/%'
+          AND n.mtime IS NOT NULL
+        ORDER BY n.mtime DESC, n.path ASC
+        LIMIT 10
+        """
+    ).fetchall()
+    recent: list[tuple[str, str, float]] = []
+    for path, mtime in recent_rows:
+        stem = path.rsplit("/", 1)[-1][:-3] if path.endswith(".md") else path.rsplit("/", 1)[-1]
+        rel_no_ext = path[:-3] if path.endswith(".md") else path
+        recent.append((rel_no_ext, stem, float(mtime)))
+
+    # -- MOCs ativos: basename literal `_MOC.md` (8 chars com `/` prefix) OU
+    # pagerank > threshold (se coluna existe). Sempre incluidos (nao filtra
+    # sensitive). Sort por path (parity com filesystem).
+    moc_suffix_len = len("/" + MOC_FILENAME)  # 8
+    if has_pagerank:
+        moc_rows = conn.execute(
+            f"""
+            SELECT n.path
+            FROM notes n
+            WHERE n.deleted_at IS NULL
+              AND n.path NOT LIKE '%/_templates/%'
+              AND (
+                n.path = '{MOC_FILENAME}'
+                OR substr(n.path, -{moc_suffix_len}) = '/{MOC_FILENAME}'
+                OR (n.pagerank IS NOT NULL AND n.pagerank > ?)
+              )
+            ORDER BY n.path
+            """,
+            (0.02,),
+        ).fetchall()
+    else:
+        moc_rows = conn.execute(
+            f"""
+            SELECT n.path
+            FROM notes n
+            WHERE n.deleted_at IS NULL
+              AND n.path NOT LIKE '%/_templates/%'
+              AND (
+                n.path = '{MOC_FILENAME}'
+                OR substr(n.path, -{moc_suffix_len}) = '/{MOC_FILENAME}'
+              )
+            ORDER BY n.path
+            """
+        ).fetchall()
+    mocs: list[tuple[str, str]] = []
+    for (path,) in moc_rows:
+        rel_no_ext = path[:-3] if path.endswith(".md") else path
+        if "/" in path:
+            folder_label = path.rsplit("/", 1)[0]
+        else:
+            folder_label = "root"
+        mocs.append((rel_no_ext, folder_label))
+
+    # -- Orfas: sem link de saida, nao-structural, nao-MOC, nao-sensitive,
+    # nao-templates. LEFT JOIN + IS NULL = "no matching outgoing link row".
+    # Sort por path (parity e determinismo).
+    orphan_rows = conn.execute(
+        f"""
+        SELECT n.path
+        FROM notes n
+        LEFT JOIN links l ON l.from_note_id = n.id
+        WHERE l.id IS NULL
+          AND n.deleted_at IS NULL
+          AND {note_sensitive_expr} = 0
+          AND n.path NOT LIKE '%/_templates/%'
+          AND {structural_filter}
+          AND substr(n.path, -{moc_suffix_len}) != '/{MOC_FILENAME}'
+          AND n.path != '{MOC_FILENAME}'
+        ORDER BY n.path
+        """
+    ).fetchall()
+    orphans: list[tuple[str, str]] = []
+    for (path,) in orphan_rows:
+        stem = path.rsplit("/", 1)[-1][:-3] if path.endswith(".md") else path.rsplit("/", 1)[-1]
+        rel_no_ext = path[:-3] if path.endswith(".md") else path
+        orphans.append((rel_no_ext, stem))
+
+    # -- Projetos ativos: prefixo `01 - Profissional/Projetos/`, nao-MOC,
+    # nao-sensitive. Se a area 01 - Profissional for sensitive, skip all.
+    projects: list[tuple[str, str]] = []
+    if "01 - Profissional" not in sensitive_area_folders:
+        project_rows = conn.execute(
+            f"""
+            SELECT n.path
+            FROM notes n
+            WHERE n.deleted_at IS NULL
+              AND {note_sensitive_expr} = 0
+              AND n.path LIKE '01 - Profissional/Projetos/%'
+              AND substr(n.path, -{moc_suffix_len}) != '/{MOC_FILENAME}'
+              AND n.path != '{MOC_FILENAME}'
+            ORDER BY n.path
+            """
+        ).fetchall()
+        for (path,) in project_rows:
+            stem = path.rsplit("/", 1)[-1][:-3] if path.endswith(".md") else path.rsplit("/", 1)[-1]
+            rel_no_ext = path[:-3] if path.endswith(".md") else path
+            projects.append((rel_no_ext, stem))
+
+    return _format_index(today, counts, recent, mocs, orphans, projects)
+
+
+def build_index(
+    vault: pathlib.Path,
+    records: list[NoteRecord],
+    today: str,
+    *,
+    conn: object | None = None,
+) -> str:
+    """Dispatch top-level: DB se disponivel, filesystem senao (v0.1.1 vault).
+
+    O caller passa `conn` quando o DB foi aberto com sucesso mais cedo na
+    run. Em qualquer falha do caminho DB (exception na query, schema
+    missing), cai de volta pra filesystem — _INDEX.md NUNCA fica vazio por
+    conta de DB flakeness.
+    """
+    if conn is not None:
+        try:
+            return _build_index_db(vault, conn, today)
+        except Exception:
+            # DB defect nao pode derrubar geracao do index. Filesystem sempre
+            # funciona pq records ja foi computado. Erro vai ser visivel no
+            # caller via report["db_error"] se acontecer durante emissao de
+            # events; aqui silenciamos pq a saida filesystem eh fallback
+            # legitimo.
+            pass
+    return _build_index_filesystem(vault, records, today)
 
 
 # ---------- events (S02) ----------
@@ -637,6 +928,11 @@ def main(argv: list[str] | None = None) -> int:
             for v in changes.values()
         ):
             write_note(rec)
+            # Refresh mtime apos autofix pra que "Ultimas 10 adicoes" no
+            # filesystem path reflita o mesmo snapshot que o DB path (que
+            # re-escaneia depois do autofix). Sem isso, as duas versoes
+            # divergem em vaults onde autofix mexeu no disco.
+            rec.mtime = rec.path.stat().st_mtime
 
     # Detect semantic issues after autofix
     report = {
@@ -694,6 +990,9 @@ def main(argv: list[str] | None = None) -> int:
     db_reason = None
     if not args.no_apply:
         conn, db_reason = _open_db_if_available(vault)
+    # conn_for_index: usado em build_index so se scan+events rodaram sem
+    # exception. Se quebrou no meio, cai no filesystem fallback (seguro).
+    conn_for_index: object | None = None
     if conn is not None:
         report["db_available"] = True
         try:
@@ -705,27 +1004,36 @@ def main(argv: list[str] | None = None) -> int:
                 conn, scan_report, links_before, triggered_by=triggered_by,
             )
             report["events_emitted"] = emitted
+            # Sucesso — conn eh confiavel pra build_index usar (S03).
+            conn_for_index = conn
         except Exception as exc:
             # Nao abortamos o script — DB pode ter qualquer bug transient.
-            # Reporta o motivo, mas continua pro path de _INDEX.md.
+            # Reporta o motivo, mas continua pro path de _INDEX.md (fallback
+            # filesystem via conn_for_index=None).
             report["db_error"] = f"{type(exc).__name__}: {exc}"
-        finally:
+    elif db_reason is not None:
+        report["db_unavailable_reason"] = db_reason
+
+    try:
+        if not args.no_apply:
+            t0 = _dt.datetime.now()
+            index_text = build_index(vault, records, today, conn=conn_for_index)
+            report["index_build_ms"] = int(
+                (_dt.datetime.now() - t0).total_seconds() * 1000
+            )
+            (vault / INDEX_FILENAME).write_text(index_text, encoding="utf-8")
+            (vault / ".obsidian-master" / "last-sync.json").write_text(
+                json.dumps({"last_sync": now_iso, "notes_scanned": len(records),
+                            "fixes": dict(fixes_summary)}, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            report["updated_index"] = True
+    finally:
+        if conn is not None:
             try:
                 conn.close()
             except Exception:
                 pass
-    elif db_reason is not None:
-        report["db_unavailable_reason"] = db_reason
-
-    if not args.no_apply:
-        index_text = build_index(vault, records, today)
-        (vault / INDEX_FILENAME).write_text(index_text, encoding="utf-8")
-        (vault / ".obsidian-master" / "last-sync.json").write_text(
-            json.dumps({"last_sync": now_iso, "notes_scanned": len(records),
-                        "fixes": dict(fixes_summary)}, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        report["updated_index"] = True
 
     sys.stdout.write(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
     return 0
