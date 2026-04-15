@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import json
+import os
 import pathlib
 import re
 import sys
@@ -22,23 +23,53 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
-# Reuso do parser canonico de Epic 01 (`core.parser.parse_markdown`).
-# Carregamos o submodulo direto via importlib, sem passar pelo package
-# `core/__init__.py` — esse ultimo puxa networkx/model2vec/sqlite-vec, e o
-# librarian historicamente e stdlib-only (pode rodar em vaults v0.1.1 sem
-# as deps pesadas instaladas). `core.parser` depende so de stdlib, entao
-# esse import isolado e seguro.
+# Reuso de submodulos de core/ (Epic 01) sem passar pelo package
+# `core/__init__.py` — esse ultimo puxa networkx/model2vec, e o librarian
+# historicamente e stdlib-only (pode rodar em vaults v0.1.1 sem as deps
+# pesadas instaladas). `core.parser`, `core.db` e `core.scanner` individualmente
+# sao stdlib (sqlite_vec/numpy sao opcionais e carregados lazy).
+#
+# Estrategia: registramos um stub vazio pra `core` no sys.modules antes de
+# carregar os submodulos, entao `from core.parser import ...` dentro de
+# `core.scanner` resolve via sys.modules sem executar `core/__init__.py`.
 import importlib.util as _ilu  # noqa: E402
+import types as _types  # noqa: E402
 
-_CORE_PARSER_PATH = pathlib.Path(__file__).resolve().parents[3] / "core" / "parser.py"
-_spec = _ilu.spec_from_file_location("_obm_core_parser", _CORE_PARSER_PATH)
-if _spec is None or _spec.loader is None:
-    raise SystemExit(f"core/parser.py nao encontrado em {_CORE_PARSER_PATH}")
-_core_parser = _ilu.module_from_spec(_spec)
-# Registra no sys.modules antes do exec: @dataclass precisa resolver
-# cls.__module__ em sys.modules durante a decoracao.
-sys.modules["_obm_core_parser"] = _core_parser
-_spec.loader.exec_module(_core_parser)
+_CORE_DIR = pathlib.Path(__file__).resolve().parents[3] / "core"
+
+
+def _load_core_module(mod_name: str, filename: str):
+    """Carrega core/<filename>.py e registra como `core.<mod_name>` em sys.modules.
+
+    Registra tambem com o shortname legacy (`_obm_core_<mod_name>`) pra
+    compat com decoracao @dataclass (que resolve __module__ no exec).
+    Idempotente: retorna o modulo ja carregado se existir.
+    """
+    qualified = f"core.{mod_name}"
+    if qualified in sys.modules:
+        return sys.modules[qualified]
+
+    # Garante stub `core` no sys.modules pra intercepter `from core.X import ...`
+    if "core" not in sys.modules:
+        _pkg = _types.ModuleType("core")
+        _pkg.__path__ = [str(_CORE_DIR)]  # type: ignore[attr-defined]
+        sys.modules["core"] = _pkg
+
+    path = _CORE_DIR / filename
+    spec = _ilu.spec_from_file_location(qualified, path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"core/{filename} nao encontrado em {path}")
+    module = _ilu.module_from_spec(spec)
+    sys.modules[qualified] = module
+    # shortname legacy (mantem compat com o wave 1)
+    sys.modules[f"_obm_core_{mod_name}"] = module
+    spec.loader.exec_module(module)
+    # Expor como attr no package stub (pra `from core import X`)
+    setattr(sys.modules["core"], mod_name, module)
+    return module
+
+
+_core_parser = _load_core_module("parser", "parser.py")
 parse_markdown = _core_parser.parse_markdown
 
 CANONICAL_AREAS = {"pessoal", "profissional", "pesquisa", "ai-memory"}
@@ -398,6 +429,168 @@ def build_index(vault: pathlib.Path, records: list[NoteRecord], today: str) -> s
     return "\n".join(lines)
 
 
+# ---------- events (S02) ----------
+
+# Dedup window: skip scan_run/note events inserted within the last N seconds.
+# Justificativa: hook PostToolUse pode disparar varias vezes em sequencia
+# (batch de edits), e manual /sync pode sobrepor. 60s cobre ambos casos sem
+# mascarar atividade legitima de um humano re-editando a mesma nota.
+_DEDUP_WINDOW_S = 60
+
+
+def _insert_event(
+    conn,
+    *,
+    event_type: str,
+    note_id: int | None = None,
+    area_id: int | None = None,
+    word_delta: int | None = None,
+    metadata: dict | None = None,
+    emitted_counts: Counter | None = None,
+) -> bool:
+    """Insert row em events com dedup app-level.
+
+    Dedup: se existe row mesmo event_type + mesmo note_id (ou NULL) na ultima
+    janela de _DEDUP_WINDOW_S segundos, skip. Retorna True se inseriu.
+
+    CAUTION: NAO usamos `datetime('now', '-60 seconds')` como cutoff pq o
+    SQLite retorna com separador espaco (`2026-04-15 22:00:00`) e nosso ts
+    e ISO-8601 com T (`2026-04-15T22:00:00+00:00`). Comparacao lexical de
+    `T` (0x54) > espaco (0x20) quebraria o dedup mascarando tudo como
+    "recente". Computamos o cutoff em Python com o mesmo formato.
+    """
+    now_dt = _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0)
+    cutoff_ts = (now_dt - _dt.timedelta(seconds=_DEDUP_WINDOW_S)).isoformat()
+    if note_id is None:
+        existing = conn.execute(
+            "SELECT 1 FROM events WHERE event_type=? AND note_id IS NULL "
+            "AND ts > ? LIMIT 1",
+            (event_type, cutoff_ts),
+        ).fetchone()
+    else:
+        existing = conn.execute(
+            "SELECT 1 FROM events WHERE event_type=? AND note_id=? "
+            "AND ts > ? LIMIT 1",
+            (event_type, note_id, cutoff_ts),
+        ).fetchone()
+    if existing is not None:
+        return False
+
+    ts = now_dt.isoformat()
+    date = ts[:10]
+    meta_json = json.dumps(metadata, ensure_ascii=False) if metadata else None
+    conn.execute(
+        "INSERT INTO events (note_id, area_id, event_type, ts, date, word_delta, "
+        "metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (note_id, area_id, event_type, ts, date, word_delta, meta_json),
+    )
+    if emitted_counts is not None:
+        emitted_counts[event_type] += 1
+    return True
+
+
+def _snapshot_links(conn) -> set[tuple[int, str]]:
+    """Snapshot do set (from_note_id, to_target) pra diff pre/post-scan."""
+    return {
+        (int(row[0]), row[1])
+        for row in conn.execute("SELECT from_note_id, to_target FROM links")
+    }
+
+
+def _note_area_and_path(conn, note_id: int) -> tuple[int | None, str | None]:
+    row = conn.execute(
+        "SELECT area_id, path FROM notes WHERE id=?", (note_id,)
+    ).fetchone()
+    if row is None:
+        return None, None
+    return (int(row[0]) if row[0] is not None else None), row[1]
+
+
+def _emit_scan_events(
+    conn,
+    scan_report,
+    links_before: set[tuple[int, str]],
+    *,
+    triggered_by: str,
+) -> dict[str, int]:
+    """Emite scan_run + note_* + link_* events. Retorna contagem por tipo.
+
+    Commit fica por conta do caller (uma unica transacao pro bloco inteiro).
+    """
+    emitted: Counter[str] = Counter()
+
+    # scan_run — sempre 1 por invocacao (dedup pode pular em hook racey)
+    _insert_event(
+        conn, event_type="scan_run", metadata={"triggered_by": triggered_by},
+        emitted_counts=emitted,
+    )
+
+    # note_* events
+    for change in scan_report.changes:
+        if change.kind == "skipped" or change.note_id is None:
+            continue
+        area_id, _path = _note_area_and_path(conn, change.note_id)
+        if change.kind == "created":
+            _insert_event(
+                conn, event_type="note_created", note_id=change.note_id,
+                area_id=area_id, word_delta=change.word_delta,
+                emitted_counts=emitted,
+            )
+        elif change.kind == "updated":
+            _insert_event(
+                conn, event_type="note_updated", note_id=change.note_id,
+                area_id=area_id, word_delta=change.word_delta,
+                emitted_counts=emitted,
+            )
+        elif change.kind == "deleted":
+            _insert_event(
+                conn, event_type="note_deleted", note_id=change.note_id,
+                area_id=area_id, emitted_counts=emitted,
+            )
+
+    # link_* events — diff snapshot pre/post
+    links_after = _snapshot_links(conn)
+    added = links_after - links_before
+    removed = links_before - links_after
+    for from_note_id, to_target in added:
+        area_id, from_path = _note_area_and_path(conn, from_note_id)
+        _insert_event(
+            conn, event_type="link_added", note_id=from_note_id,
+            area_id=area_id,
+            metadata={"from_note": from_path, "to_target": to_target},
+            emitted_counts=emitted,
+        )
+    for from_note_id, to_target in removed:
+        area_id, from_path = _note_area_and_path(conn, from_note_id)
+        _insert_event(
+            conn, event_type="link_removed", note_id=from_note_id,
+            area_id=area_id,
+            metadata={"from_note": from_path, "to_target": to_target},
+            emitted_counts=emitted,
+        )
+
+    conn.commit()
+    return dict(emitted)
+
+
+def _open_db_if_available(vault: pathlib.Path) -> tuple[object | None, str | None]:
+    """Tenta abrir `core.db.connect(vault)`. Retorna (conn, reason_if_failed).
+
+    Retorna `(None, "<motivo>")` em TODOS os casos de falha (db nao existe,
+    import error, schema nao aplicavel, etc). Nunca crasheia — script tem
+    que funcionar em vaults v0.1.1 sem DB.
+    """
+    db_path = vault / ".obsidian-master" / "db.sqlite"
+    if not db_path.exists():
+        return None, "db file not present (v0.1.1 vault)"
+    try:
+        _core_db = _load_core_module("db", "db.py")
+        conn = _core_db.connect(vault)
+        return conn, None
+    except Exception as exc:  # pragma: no cover — depende do ambiente
+        return None, f"{type(exc).__name__}: {exc}"
+
+
 # ---------- main ----------
 
 def main(argv: list[str] | None = None) -> int:
@@ -409,6 +602,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-apply", action="store_true",
                         help="Don't write fixes or rewrite _INDEX.md; just report.")
     parser.add_argument("--quiet", action="store_true", help="Suppress non-JSON output.")
+    parser.add_argument("--init", action="store_true",
+                        help="Mark this as the first scan after vault init. Emitted "
+                             "scan_run event carries triggered_by='init'.")
 
     args = parser.parse_args(argv)
 
@@ -417,6 +613,15 @@ def main(argv: list[str] | None = None) -> int:
 
     today = _dt.date.today().isoformat()
     now_iso = _dt.datetime.now().isoformat(timespec="seconds")
+
+    # --- triggered_by detection (S02) ---
+    # Precedencia: --init flag > UPDATE_INDEX_TRIGGER env > "manual" default.
+    # Hook (wave S05) passa env var; manual /sync nao passa nada; --init
+    # so e passado pelo init skill na primeira execucao.
+    if args.init:
+        triggered_by = "init"
+    else:
+        triggered_by = os.environ.get("UPDATE_INDEX_TRIGGER", "manual")
 
     records = scan_vault(vault)
 
@@ -447,6 +652,9 @@ def main(argv: list[str] | None = None) -> int:
         "area_folder_mismatch": [],
         "auto_fixed": dict(fixes_summary),
         "last_sync": now_iso,
+        "db_available": False,
+        "events_emitted": {},
+        "scan_duration_s": None,
     }
 
     for rec in records:
@@ -477,6 +685,38 @@ def main(argv: list[str] | None = None) -> int:
             )
         if issues["orphan"]:
             report["orphans"].append(str(rec.rel))
+
+    # --- DB-backed scan + events (S02) ---
+    # Precisa rodar apos autofix (pra que mtimes/body_hash refletem o estado
+    # final das notas) e ANTES do rewrite de _INDEX.md (pra nao poluir o
+    # scan com a propria saida do librarian). Em vaults v0.1.1 sem DB, ou
+    # em `--no-apply`, fica None e pula o bloco inteiro.
+    conn = None
+    db_reason = None
+    if not args.no_apply:
+        conn, db_reason = _open_db_if_available(vault)
+    if conn is not None:
+        report["db_available"] = True
+        try:
+            _core_scanner = _load_core_module("scanner", "scanner.py")
+            links_before = _snapshot_links(conn)
+            scan_report = _core_scanner.scan(conn, vault)
+            report["scan_duration_s"] = round(scan_report.duration_s, 4)
+            emitted = _emit_scan_events(
+                conn, scan_report, links_before, triggered_by=triggered_by,
+            )
+            report["events_emitted"] = emitted
+        except Exception as exc:
+            # Nao abortamos o script — DB pode ter qualquer bug transient.
+            # Reporta o motivo, mas continua pro path de _INDEX.md.
+            report["db_error"] = f"{type(exc).__name__}: {exc}"
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    elif db_reason is not None:
+        report["db_unavailable_reason"] = db_reason
 
     if not args.no_apply:
         index_text = build_index(vault, records, today)
