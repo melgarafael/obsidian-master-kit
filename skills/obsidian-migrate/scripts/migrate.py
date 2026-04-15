@@ -298,6 +298,7 @@ def _run_hdbscan(embeddings, *, min_cluster_size: int, min_samples: int):
         min_cluster_size=min_cluster_size,
         min_samples=min_samples,
         metric="euclidean",  # equivalente a cosine em L2-normalized vectors (Epic 01)
+        copy=True,  # future default (1.10); silencia FutureWarning
     )
     return model.fit_predict(embeddings)
 
