@@ -7,6 +7,7 @@ Contratos expostos:
   → wrapper canonico de embeddings (256d, L2-normalized)
 """
 
+from . import config
 from .db import connect, ensure_schema
 from .embeddings import (
     Embedder,

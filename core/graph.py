@@ -13,6 +13,8 @@ from typing import Any
 
 import networkx as nx
 
+from core.config import PAGERANK_ALPHA
+
 __all__ = ["update_graph_metrics", "find_mocs"]
 
 _LOG = logging.getLogger(__name__)
@@ -57,7 +59,7 @@ def update_graph_metrics(conn, with_betweenness: bool = False) -> dict[str, Any]
     in_deg = dict(G.in_degree())
     out_deg = dict(G.out_degree())
     if len(node_ids) > 0:
-        pagerank = nx.pagerank(G, alpha=0.85)
+        pagerank = nx.pagerank(G, alpha=PAGERANK_ALPHA)
     else:
         pagerank = {}
 

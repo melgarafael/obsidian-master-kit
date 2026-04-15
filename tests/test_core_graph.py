@@ -165,3 +165,10 @@ def test_performance_100_nodes(tmp_path):
     res = update_graph_metrics(conn)
     assert res["duration_s"] < 1.0
     assert res["nodes"] == 100
+
+
+def test_pagerank_uses_config_alpha(tmp_path, monkeypatch):
+    """Regressao: pagerank alpha vem de config.py, nao hardcode."""
+    import core.graph
+    from core import config
+    assert core.graph.PAGERANK_ALPHA == config.PAGERANK_ALPHA == 0.85
