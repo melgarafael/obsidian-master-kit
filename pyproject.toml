@@ -49,6 +49,13 @@ dev = [
 fallback = [
     "sentence-transformers>=2.2",
 ]
+pulse = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "jinja2>=3.1",
+    "fsrs>=4.0",
+    "httpx>=0.27",
+]
 
 [project.urls]
 Homepage = "https://github.com/melgarafael/obsidian-master-kit"
