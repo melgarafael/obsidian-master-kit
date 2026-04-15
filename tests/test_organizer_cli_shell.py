@@ -98,12 +98,12 @@ def test_duplicates_min_cos_override(org, initialized_vault, capsys):
     assert p["min_cos"] == 0.75
 
 
-def test_moc_audit_stub(org, initialized_vault, capsys):
+def test_moc_audit_sem_clusters_retorna_vazio(org, initialized_vault, capsys):
     rc, p = _run(org, ["moc-audit", "--vault", str(initialized_vault)], capsys)
     assert rc == 0
     assert p["command"] == "moc-audit"
-    assert p["planned_for_wave"] == 4
     assert p["missing_moc"] == []
+    assert p["count"] == 0
 
 
 def test_area_mismatch_stub(org, initialized_vault, capsys):

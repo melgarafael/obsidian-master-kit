@@ -36,7 +36,6 @@ from core.db import connect  # noqa: E402
 from core.paths import resolve_vault  # noqa: E402
 
 WAVE_PLAN = {
-    "moc-audit": 4,
     "area-mismatch": 5,
     "propose": 6,
     "report": 6,
@@ -44,6 +43,7 @@ WAVE_PLAN = {
 
 _CLUSTER_PATH = pathlib.Path(__file__).parent / "cluster.py"
 _DUPLICATES_PATH = pathlib.Path(__file__).parent / "duplicates.py"
+_MOC_AUDIT_PATH = pathlib.Path(__file__).parent / "moc_audit.py"
 
 
 def _emit(payload: dict[str, Any]) -> None:
@@ -153,11 +153,32 @@ def cmd_duplicates(args) -> int:
 def cmd_moc_audit(args) -> int:
     vault = resolve_vault(args.vault)
     conn = connect(vault)
-    payload = _stub_payload("moc-audit", vault, conn, args)
+    moc = _load_by_path("_organizer_moc_audit", _MOC_AUDIT_PATH)
+    proposals = moc.audit_mocs(conn)
+    persisted = 0
+    stubs_written: list[str] = []
+    if proposals:
+        persisted = moc.save_suggestions(conn, proposals)
+        if args.create_suggestions:
+            for p in proposals:
+                stub = moc.create_moc_stub(vault, p, conn)
+                stubs_written.append(str(stub.relative_to(vault)))
+    payload = _base("moc-audit", vault, conn, args)
     payload.update(
         {
             "create_suggestions": args.create_suggestions,
-            "missing_moc": [],
+            "missing_moc": [
+                {
+                    "cluster_id": p["cluster_id"],
+                    "cluster_label": p["cluster_label"],
+                    "note_count": p["note_count"],
+                    "reasoning": p["reasoning"],
+                }
+                for p in proposals
+            ],
+            "count": len(proposals),
+            "persisted": persisted,
+            "stubs_written": stubs_written,
         }
     )
     _emit(payload)
