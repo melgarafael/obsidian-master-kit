@@ -452,6 +452,271 @@ def _ai_label(cluster_summary: dict) -> str | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Wave 4: propose (folder -> area mapping + CLAUDE.md preview)
+# ---------------------------------------------------------------------------
+def _load_folder_cluster_distribution(conn, vault):
+    """Retorna dict: folder -> {cluster_id -> count}, incluindo 'noise' (notas fora de cluster).
+
+    Considera apenas top-level folders (primeiro segmento do path).
+    Notas na raiz (sem folder) vao em '(raiz)'.
+    """
+    rows = conn.execute("""
+        SELECT n.path,
+               cn.cluster_id,
+               c.label
+        FROM notes n
+        LEFT JOIN cluster_notes cn ON cn.note_id = n.id
+        LEFT JOIN clusters c ON c.id = cn.cluster_id
+        WHERE n.deleted_at IS NULL
+    """).fetchall()
+
+    from collections import defaultdict
+    distribution = defaultdict(lambda: {"total": 0, "by_cluster": defaultdict(int),
+                                         "by_label": {}})
+    for path, cluster_id, cluster_label in rows:
+        parts = path.split("/", 1)
+        folder = parts[0] if len(parts) > 1 else "(raiz)"
+        distribution[folder]["total"] += 1
+        key = cluster_id if cluster_id is not None else "noise"
+        distribution[folder]["by_cluster"][key] += 1
+        if cluster_label and cluster_id is not None:
+            distribution[folder]["by_label"][cluster_id] = cluster_label
+    return dict(distribution)
+
+
+def _propose_folder_areas(distribution, dominance_threshold: float = 0.60):
+    """Pra cada folder, determina area proposta.
+
+    Retorna list[dict] com: folder, total, dominant_cluster_id, dominant_label,
+      dominance, area_slug (proposta), status (clear|ambiguous|noise_heavy).
+    """
+    proposals = []
+    for folder, data in sorted(distribution.items()):
+        total = data["total"]
+        by_cluster = data["by_cluster"]
+        # Descarta noise pra calculo de dominancia entre clusters reais
+        real = {k: v for k, v in by_cluster.items() if k != "noise"}
+        noise_count = by_cluster.get("noise", 0)
+
+        if not real:
+            # Tudo noise
+            proposals.append({
+                "folder": folder, "total": total, "status": "noise_heavy",
+                "dominant_cluster_id": None, "dominant_label": None,
+                "dominance": 0.0, "area_slug": None, "area_label": None,
+                "noise_count": noise_count,
+            })
+            continue
+
+        dominant_id = max(real, key=real.get)
+        dominant_count = real[dominant_id]
+        dominance = dominant_count / total
+        dominant_label = data["by_label"].get(dominant_id, f"cluster-{dominant_id}")
+
+        status = "clear" if dominance >= dominance_threshold else "ambiguous"
+        area_slug = _slug(folder) if status == "clear" else None
+        area_label = folder if status == "clear" else None
+
+        proposals.append({
+            "folder": folder, "total": total,
+            "dominant_cluster_id": int(dominant_id),
+            "dominant_label": dominant_label,
+            "dominance": round(dominance, 3),
+            "status": status,
+            "area_slug": area_slug,
+            "area_label": area_label,
+            "noise_count": noise_count,
+        })
+    return proposals
+
+
+def _slug(folder: str) -> str:
+    """'01 - Profissional' -> 'profissional', 'Research & Dev' -> 'research-dev'."""
+    import re as _re
+    s = folder.lower()
+    # remove numero-hifen prefix
+    s = _re.sub(r"^\d+\s*[-_]\s*", "", s)
+    # normalize separators
+    s = _re.sub(r"[&/\s]+", "-", s)
+    s = _re.sub(r"[^a-z0-9\-]", "", s)
+    s = _re.sub(r"-+", "-", s).strip("-")
+    return s or "area"
+
+
+def _write_proposal_md(vault, proposals, discovered_areas, claude_md_preview):
+    """Escreve .obsidian-master/migration-proposal.md."""
+    out_path = vault / ".obsidian-master" / "migration-proposal.md"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    lines = []
+    lines.append("# Proposta de Migracao (Opcao C)")
+    lines.append("")
+    lines.append(
+        "> Gerada por `obsidian-migrate propose`. **Voce pode editar este arquivo a mao** "
+        "antes de rodar `migrate.py plan`. Alteracoes que importam: a coluna 'Area "
+        "proposta' da tabela. Linhas em 'Pastas ambiguas' ficam vazias — decida voce."
+    )
+    lines.append("")
+
+    lines.append("## Mapeamento pasta -> area")
+    lines.append("")
+    lines.append("| Pasta | Notas | Cluster dominante | Dominancia | Area proposta | Status |")
+    lines.append("|---|---|---|---|---|---|")
+    for p in proposals:
+        if p["status"] == "clear":
+            area = f"`{p['area_slug']}`"
+        elif p["status"] == "ambiguous":
+            area = "_(decidir)_"
+        else:
+            area = "_(ruido)_"
+        dom_str = f"{p['dominance']*100:.0f}%" if p["status"] != "noise_heavy" else "-"
+        label = (p["dominant_label"] or "-")[:50]
+        lines.append(f"| {p['folder']} | {p['total']} | {label} | {dom_str} | {area} | {p['status']} |")
+    lines.append("")
+
+    ambiguous = [p for p in proposals if p["status"] == "ambiguous"]
+    if ambiguous:
+        lines.append("## Pastas ambiguas (sem cluster dominante >=60%)")
+        lines.append("")
+        for p in ambiguous:
+            lines.append(f"- **{p['folder']}**: {p['total']} notas, dominante "
+                         f"`{p['dominant_label']}` mas so {p['dominance']*100:.0f}%. "
+                         "Edite a linha na tabela acima com uma area manualmente.")
+        lines.append("")
+
+    lines.append("## Areas canonicas (opcionais)")
+    lines.append("")
+    lines.append("O kit tem 4 areas canonicas que voce pode adicionar alem das descobertas:")
+    lines.append("")
+    lines.append("- `pessoal` — Pessoal / Journaling / Memorias")
+    lines.append("- `profissional` — Profissional / Projetos / Clientes")
+    lines.append("- `pesquisa` — Pesquisas e Estudos")
+    lines.append("- `ai-memory` — Memoria da IA (contexto de sessoes)")
+    lines.append("")
+    lines.append("Se quiser usa-las, adicione a coluna 'Area proposta' das linhas relevantes.")
+    lines.append("")
+
+    lines.append("## Preview do CLAUDE.md")
+    lines.append("")
+    lines.append("Quando voce rodar `migrate.py apply` apos approval, este CLAUDE.md sera gerado")
+    lines.append("na raiz do vault:")
+    lines.append("")
+    lines.append("```markdown")
+    lines.append(claude_md_preview)
+    lines.append("```")
+    lines.append("")
+
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return out_path
+
+
+def _render_claude_md(discovered_areas: list[dict]) -> str:
+    """Renderiza CLAUDE.md adaptativo dado o set de areas descobertas."""
+    lines = [
+        "# CLAUDE.md — Doutrina deste vault",
+        "",
+        "> Este arquivo e a doutrina humana do vault. Edite livremente. O bibliotecario",
+        "> (`obsidian-librarian`) le este arquivo pra entender o contexto e nao sobrescreve-lo.",
+        "",
+        "## Mapa de Areas",
+        "",
+        "Este vault tem as seguintes areas, descobertas via clustering automatico do seu conteudo:",
+        "",
+    ]
+    for a in discovered_areas:
+        lines.append(f"- **`{a['slug']}`** — {a['label']} ({a['note_count']} notas)")
+    lines.append("")
+    lines.append("## Convencoes de frontmatter")
+    lines.append("")
+    lines.append("Toda nota tem:")
+    lines.append("- `created: YYYY-MM-DD` — data de criacao")
+    lines.append("- `updated: YYYY-MM-DD` — ultima atualizacao")
+    lines.append("- `area: <slug>` — uma das areas acima")
+    lines.append("- `type: <nota|projeto|pesquisa|diario|referencia|moc>` — tipo da nota")
+    lines.append("- `status: <draft|ativo|arquivado>` — ciclo de vida")
+    lines.append("- `tags: [list, em, formato, pai/filho]` — tags hierarquicas")
+    lines.append("")
+    lines.append("## Regras de ouro")
+    lines.append("")
+    lines.append("- Nomes de pasta em pt-br exceto as 4 canonicas se voce adotar (pessoal, profissional, pesquisa, ai-memory)")
+    lines.append("- Links usam wiki-links `[[Nota X]]` ou `[[Nota X|alias]]`")
+    lines.append("- Cada area tem um `_MOC.md` no nivel top (Map of Content)")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _persist_discovered_areas(conn, proposals):
+    """Grava em `areas` as areas com status='clear'. Noop pras ambiguas/noise."""
+    import datetime as _dt
+    now = _dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    created = []
+    with conn:
+        for p in proposals:
+            if p["status"] != "clear":
+                continue
+            # Idempotente: evita duplicar em re-runs
+            existing = conn.execute(
+                "SELECT id FROM areas WHERE slug=?", (p["area_slug"],)
+            ).fetchone()
+            if existing:
+                continue
+            conn.execute(
+                """INSERT INTO areas(slug, label, folder, is_canonical, sensitive, created_at)
+                   VALUES (?, ?, ?, 0, 0, ?)""",
+                (p["area_slug"], p["area_label"], p["folder"], now),
+            )
+            created.append(p["area_slug"])
+    return created
+
+
+def cmd_propose(args) -> int:
+    vault = pathlib.Path(args.vault).expanduser().resolve()
+    db_path = vault / ".obsidian-master" / "db.sqlite"
+    if not db_path.exists():
+        print("Erro: DB nao existe. Rode 'shadow-scan' primeiro.", file=sys.stderr)
+        return 1
+
+    from core.db import connect
+    conn = connect(vault)
+
+    # Check clusters exist
+    cluster_count = conn.execute("SELECT COUNT(*) FROM clusters").fetchone()[0]
+    if cluster_count == 0:
+        print("Erro: nenhum cluster encontrado. Rode 'cluster' primeiro.", file=sys.stderr)
+        return 1
+
+    distribution = _load_folder_cluster_distribution(conn, vault)
+    if not distribution:
+        print("Erro: nenhuma nota encontrada no DB.", file=sys.stderr)
+        return 1
+
+    proposals = _propose_folder_areas(distribution)
+    created_slugs = _persist_discovered_areas(conn, proposals)
+
+    # Build list of discovered areas pra render CLAUDE.md preview
+    discovered_areas = [
+        {"slug": p["area_slug"], "label": p["area_label"], "note_count": p["total"]}
+        for p in proposals if p["status"] == "clear"
+    ]
+    claude_preview = _render_claude_md(discovered_areas)
+
+    out_path = _write_proposal_md(vault, proposals, discovered_areas, claude_preview)
+
+    # Report
+    n_clear = sum(1 for p in proposals if p["status"] == "clear")
+    n_ambiguous = sum(1 for p in proposals if p["status"] == "ambiguous")
+    n_noise = sum(1 for p in proposals if p["status"] == "noise_heavy")
+    print(f"Propose OK. Pastas analisadas: {len(proposals)}")
+    print(f"  {n_clear} com dominante >=60% (mapeadas)")
+    print(f"  {n_ambiguous} ambiguas (decida manualmente)")
+    print(f"  {n_noise} com majoria noise (sem mapping)")
+    print(f"  {len(created_slugs)} novas areas registradas: {', '.join(created_slugs) or '(nenhuma)'}")
+    print(f"  Proposta: {out_path}")
+    print("  Edite o arquivo se quiser, depois rode 'plan'.")
+    return 0
+
+
 def _stub(wave: int, cmd: str):
     """Gera um handler stub pra subcommand nao implementado ainda."""
     def handler(args) -> int:
@@ -501,9 +766,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_cl.set_defaults(func=cmd_cluster)
 
+    # Wave 4: propose
+    p_pr = sub.add_parser("propose", help="Gera migration-proposal.md + CLAUDE.md preview")
+    p_pr.add_argument("--vault", required=True)
+    p_pr.set_defaults(func=cmd_propose)
+
     # Stubs pras proximas waves
     for (w, name, help_text) in [
-        (4, "propose",     "Gera migration-proposal.md + CLAUDE.md preview"),
         (5, "plan",        "Popula migration_plan em lotes de 20"),
         (5, "approve",     "Approval interativo por batch"),
         (6, "apply",       "Aplica renames do batch (Wave 6)"),
