@@ -36,7 +36,6 @@ from core.db import connect  # noqa: E402
 from core.paths import resolve_vault  # noqa: E402
 
 WAVE_PLAN = {
-    "area-mismatch": 5,
     "propose": 6,
     "report": 6,
 }
@@ -44,6 +43,7 @@ WAVE_PLAN = {
 _CLUSTER_PATH = pathlib.Path(__file__).parent / "cluster.py"
 _DUPLICATES_PATH = pathlib.Path(__file__).parent / "duplicates.py"
 _MOC_AUDIT_PATH = pathlib.Path(__file__).parent / "moc_audit.py"
+_AREA_MISMATCH_PATH = pathlib.Path(__file__).parent / "area_mismatch.py"
 
 
 def _emit(payload: dict[str, Any]) -> None:
@@ -188,11 +188,16 @@ def cmd_moc_audit(args) -> int:
 def cmd_area_mismatch(args) -> int:
     vault = resolve_vault(args.vault)
     conn = connect(vault)
-    payload = _stub_payload("area-mismatch", vault, conn, args)
+    am = _load_by_path("_organizer_area_mismatch", _AREA_MISMATCH_PATH)
+    mismatches = am.detect_mismatches(conn)
+    persisted = am.save_suggestions(conn, mismatches)
+    payload = _base("area-mismatch", vault, conn, args)
     payload.update(
         {
             "fix": args.fix,
-            "mismatches": [],
+            "mismatches": mismatches,
+            "count": len(mismatches),
+            "persisted": persisted,
         }
     )
     _emit(payload)
