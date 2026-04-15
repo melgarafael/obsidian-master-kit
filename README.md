@@ -49,7 +49,7 @@ Linux, qualquer terminal). Cole o comando abaixo **exatamente como está** e ape
 Enter:
 
 ```bash
-git clone https://github.com/rafaelmelgaco/obsidian-master-kit ~/.claude/plugins/obsidian-master-kit
+git clone https://github.com/melgarafael/obsidian-master-kit ~/.claude/plugins/obsidian-master-kit
 ```
 
 O que isso faz: baixa o kit e coloca ele dentro da pasta onde o Claude Code procura
@@ -80,7 +80,7 @@ Em algumas versões do Claude Code você pode instalar mais rápido ainda. Dentr
 Claude Code, digita:
 
 ```
-/plugin install rafaelmelgaco/obsidian-master-kit
+/plugin install melgarafael/obsidian-master-kit
 ```
 
 Se funcionar, ótimo — pula o Passo 1 e 2. Se o comando der erro ou o Claude Code
@@ -267,7 +267,7 @@ arrastar a pasta. Se mesmo assim não abrir, confirma que a pasta tem arquivos
 ### Ainda com problema?
 
 Abre uma issue em
-[github.com/rafaelmelgaco/obsidian-master-kit/issues](https://github.com/rafaelmelgaco/obsidian-master-kit/issues)
+[github.com/melgarafael/obsidian-master-kit/issues](https://github.com/melgarafael/obsidian-master-kit/issues)
 descrevendo:
 
 - O que você tentou fazer

@@ -39,13 +39,13 @@ navegável, linkado e coerente.
 
 ```bash
 # No Claude Code:
-/plugin install rafaelmelgaco/obsidian-master-kit
+/plugin install melgarafael/obsidian-master-kit
 ```
 
 ### Clone manual
 
 ```bash
-git clone https://github.com/rafaelmelgaco/obsidian-master-kit \
+git clone https://github.com/melgarafael/obsidian-master-kit \
   ~/.claude/plugins/obsidian-master-kit
 ```
 
@@ -168,7 +168,7 @@ pasta de markdown, não depende mais do kit depois de criado.
 ## Contribuindo
 
 Issues e PRs bem-vindos em
-[github.com/rafaelmelgaco/obsidian-master-kit/issues](https://github.com/rafaelmelgaco/obsidian-master-kit/issues).
+[github.com/melgarafael/obsidian-master-kit/issues](https://github.com/melgarafael/obsidian-master-kit/issues).
 
 ## Licença
 

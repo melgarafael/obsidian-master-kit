@@ -1,7 +1,7 @@
 # {{VAULT_NAME}}
 
 > Segundo cérebro de **{{OWNER_NAME}}**, gerado com
-> [obsidian-master-kit](https://github.com/rafaelmelgaco/obsidian-master-kit).
+> [obsidian-master-kit](https://github.com/melgarafael/obsidian-master-kit).
 
 ## Como navegar
 
