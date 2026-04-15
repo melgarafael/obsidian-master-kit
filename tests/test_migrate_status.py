@@ -75,11 +75,3 @@ def test_cmd_status_empty_exits_0(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "empty" in out
     assert "obsidian-init" in out
-
-
-def test_stub_subcommand_exits_2(tmp_path, capsys):
-    """Subcommands ainda nao implementados retornam exit 2 com guidance."""
-    code = migrate.main(["apply", "--vault", str(tmp_path)])
-    assert code == 2
-    err = capsys.readouterr().err
-    assert "Wave 6" in err

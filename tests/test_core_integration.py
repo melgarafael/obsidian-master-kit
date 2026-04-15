@@ -71,12 +71,12 @@ def test_cenario_a_vault_novo_init_scan(vault: pathlib.Path) -> None:
     """A: vault novo (fixture) → connect() cria DB + scan popula notes."""
     conn = connect(vault)
     try:
-        # connect() ja rodou ensure_schema → schema version 1 aplicada
+        # connect() ja rodou ensure_schema → ao menos migration 001 aplicada
         assert (vault / ".obsidian-master" / "db.sqlite").exists()
         ver = conn.execute(
             "SELECT MAX(version) FROM schema_version"
         ).fetchone()[0]
-        assert ver == 1
+        assert ver >= 1
 
         report = scan(conn, vault, embedder=_FakeEmbedder())
 

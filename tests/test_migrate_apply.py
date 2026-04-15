@@ -54,11 +54,8 @@ def _full_e2e_setup(tmp_path, monkeypatch):
     # Edit proposal: map old-hermetismo -> hermetismo, old-crm -> crm
     prop = vault / ".obsidian-master" / "migration-proposal.md"
     content = prop.read_text(encoding="utf-8")
-    import re
-    content = re.sub(r"\| old-hermetismo \| (\d+) \| ([^|]+) \| (\d+)% \| _\(decidir\)_",
-                     r"| old-hermetismo | \1 | \2 | \3% | `hermetismo`", content)
-    content = re.sub(r"\| old-crm \| (\d+) \| ([^|]+) \| (\d+)% \| _\(decidir\)_",
-                     r"| old-crm | \1 | \2 | \3% | `crm`", content)
+    content = content.replace("`old-hermetismo`", "`hermetismo`")
+    content = content.replace("`old-crm`", "`crm`")
     prop.write_text(content, encoding="utf-8")
     migrate.main(["plan", "--vault", str(vault)])
     # Approve all
@@ -99,18 +96,19 @@ def test_apply_all_creates_marker_completed(tmp_path, monkeypatch):
     assert data["migration_completed"] is True
 
 
-def test_apply_single_batch_does_not_mark_completed(tmp_path, monkeypatch):
-    """Com multi-batch, apply de 1 batch SO nao deve marcar completed."""
-    # Setup with enough notes for 2+ batches (>20 approved)
-    vault = tmp_path / "vault"
-    vault.mkdir()
-    sub = vault / "old-hermetismo"
-    sub.mkdir()
+def _multi_batch_setup(tmp_path, monkeypatch):
+    """Vault com 2+ batches de notas aprovadas (>=25 hermetismo + 10 crm pra
+    HDBSCAN ter contraste entre clusters)."""
+    vault = tmp_path / "vault"; vault.mkdir()
+    h = vault / "old-hermetismo"; h.mkdir()
     for i in range(25):
-        (sub / f"hermetismo-{i}.md").write_text(
+        (h / f"hermetismo-{i}.md").write_text(
             f"---\ntitle: Hermetismo {i}\n---\nconteudo hermetismo {i}\n"
         )
-    emb = _ThemeEmbedder(["hermetismo"])
+    c = vault / "old-crm"; c.mkdir()
+    for i in range(10):
+        (c / f"crm-{i}.md").write_text(f"---\ntitle: CRM {i}\n---\npipeline crm {i}\n")
+    emb = _ThemeEmbedder(["hermetismo", "crm"])
     from core import embeddings as ce
     monkeypatch.setattr(ce, "get_default_embedder", lambda: emb)
     migrate.main(["shadow-scan", "--vault", str(vault)])
@@ -118,15 +116,19 @@ def test_apply_single_batch_does_not_mark_completed(tmp_path, monkeypatch):
     migrate.main(["propose", "--vault", str(vault)])
     prop = vault / ".obsidian-master" / "migration-proposal.md"
     content = prop.read_text(encoding="utf-8")
-    import re
-    content = re.sub(r"\| old-hermetismo \| (\d+) \| ([^|]+) \| (\d+)% \| _\(decidir\)_",
-                     r"| old-hermetismo | \1 | \2 | \3% | `hermetismo`", content)
+    content = content.replace("`old-hermetismo`", "`hermetismo`")
+    content = content.replace("`old-crm`", "`crm`")
     prop.write_text(content, encoding="utf-8")
     migrate.main(["plan", "--vault", str(vault)])
     inputs = iter(["y", "y"])
     monkeypatch.setattr("builtins.input", lambda _=None: next(inputs))
     migrate.main(["approve", "--vault", str(vault), "--batch", "all"])
-    # Apply only batch 1
+    return vault
+
+
+def test_apply_single_batch_does_not_mark_completed(tmp_path, monkeypatch):
+    """Com multi-batch, apply de 1 batch SO nao deve marcar completed."""
+    vault = _multi_batch_setup(tmp_path, monkeypatch)
     migrate.main(["apply", "--vault", str(vault), "--batch", "1"])
     marker = vault / ".obsidian-master" / "marker.json"
     if marker.exists():
@@ -136,31 +138,7 @@ def test_apply_single_batch_does_not_mark_completed(tmp_path, monkeypatch):
 
 def test_apply_enforces_batch_order(tmp_path, monkeypatch):
     """Aplicar batch 2 antes do 1 deve falhar."""
-    vault = tmp_path / "vault"
-    vault.mkdir()
-    sub = vault / "old-hermetismo"
-    sub.mkdir()
-    for i in range(25):
-        (sub / f"hermetismo-{i}.md").write_text(
-            f"---\ntitle: H {i}\n---\nconteudo hermetismo {i}\n"
-        )
-    emb = _ThemeEmbedder(["hermetismo"])
-    from core import embeddings as ce
-    monkeypatch.setattr(ce, "get_default_embedder", lambda: emb)
-    migrate.main(["shadow-scan", "--vault", str(vault)])
-    migrate.main(["cluster", "--vault", str(vault)])
-    migrate.main(["propose", "--vault", str(vault)])
-    prop = vault / ".obsidian-master" / "migration-proposal.md"
-    content = prop.read_text(encoding="utf-8")
-    import re
-    content = re.sub(r"\| old-hermetismo \| (\d+) \| ([^|]+) \| (\d+)% \| _\(decidir\)_",
-                     r"| old-hermetismo | \1 | \2 | \3% | `hermetismo`", content)
-    prop.write_text(content, encoding="utf-8")
-    migrate.main(["plan", "--vault", str(vault)])
-    inputs = iter(["y", "y"])
-    monkeypatch.setattr("builtins.input", lambda _=None: next(inputs))
-    migrate.main(["approve", "--vault", str(vault), "--batch", "all"])
-    # Now try to apply batch 2 first — should fail
+    vault = _multi_batch_setup(tmp_path, monkeypatch)
     code = migrate.main(["apply", "--vault", str(vault), "--batch", "2"])
     assert code == 1
 
@@ -207,10 +185,15 @@ def test_wikilinks_refactored_on_move(tmp_path, monkeypatch):
     )
     (src / "nota-B.md").write_text("---\ntitle: B\n---\nConteudo.\n")
     # Embed + cluster
-    emb = _ThemeEmbedder(["hermetismo"])
-    # Precisa de mais notas pra clustering — cria mais
+    emb = _ThemeEmbedder(["hermetismo", "crm"])
+    # Precisa de mais notas pra clustering — cria mais, e inclui uma segunda pasta
+    # com outro tema pra HDBSCAN ter contraste (min_cluster_size=5 precisa de densidade
+    # relativa entre clusters — sem contraste, todas as 12 viram noise)
     for i in range(10):
         (src / f"hermetismo-{i}.md").write_text(f"---\ntitle: H{i}\n---\nhermetismo texto\n")
+    crm_sub = vault / "old-crm"; crm_sub.mkdir()
+    for i in range(8):
+        (crm_sub / f"crm-{i}.md").write_text(f"---\ntitle: CRM {i}\n---\npipeline crm funnel\n")
     from core import embeddings as ce
     monkeypatch.setattr(ce, "get_default_embedder", lambda: emb)
     migrate.main(["shadow-scan", "--vault", str(vault)])
@@ -219,9 +202,7 @@ def test_wikilinks_refactored_on_move(tmp_path, monkeypatch):
     # Inject slug for old-hermetismo
     prop = vault / ".obsidian-master" / "migration-proposal.md"
     content = prop.read_text(encoding="utf-8")
-    import re
-    content = re.sub(r"\| old-hermetismo \| (\d+) \| ([^|]+) \| (\d+)% \| _\(decidir\)_",
-                     r"| old-hermetismo | \1 | \2 | \3% | `alvo`", content)
+    content = content.replace("`old-hermetismo`", "`alvo`")
     prop.write_text(content, encoding="utf-8")
     migrate.main(["plan", "--vault", str(vault)])
     inputs = iter(["y", "y"])

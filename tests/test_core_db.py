@@ -95,21 +95,35 @@ def test_connect_creates_db_file(tmp_path: pathlib.Path) -> None:
 
 def test_connect_is_idempotent(tmp_path: pathlib.Path) -> None:
     conn1 = connect(tmp_path)
+    count1 = conn1.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0]
     conn1.close()
-    # Segunda conexao nao pode falhar nem re-aplicar migration.
+    # Segunda conexao nao pode duplicar migrations.
     conn2 = connect(tmp_path)
     try:
-        row = conn2.execute("SELECT COUNT(*) FROM schema_version").fetchone()
-        assert row[0] == 1, "schema_version deve ter exatamente 1 registro"
+        count2 = conn2.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0]
+        assert count1 == count2, "re-connect nao deve re-aplicar migrations"
+        assert count1 >= 1, "pelo menos 001_initial deve estar aplicada"
     finally:
         conn2.close()
 
 
-def test_schema_version_is_one(tmp_path: pathlib.Path) -> None:
+def test_schema_version_matches_latest_migration(tmp_path: pathlib.Path) -> None:
+    """Max version no DB bate com a ultima migration on-disk."""
+    import pathlib as _pl
+    import re as _re
     conn = connect(tmp_path)
     try:
-        row = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
-        assert row[0] == 1
+        max_ver = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
+        assert max_ver >= 1
+        migrations_dir = _pl.Path(__file__).resolve().parents[1] / "core" / "migrations"
+        versions = sorted(
+            int(_re.match(r"(\d+)_", p.name).group(1))
+            for p in migrations_dir.glob("*.sql")
+        )
+        assert versions, "pelo menos um .sql deve existir em core/migrations"
+        assert max_ver == versions[-1], (
+            f"schema_version {max_ver} != ultima migration on-disk {versions[-1]}"
+        )
     finally:
         conn.close()
 
