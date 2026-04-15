@@ -1,0 +1,7 @@
+{
+  "kit": "obsidian-master-kit",
+  "kit_version": "{{KIT_VERSION}}",
+  "vault_created_at": "{{DATE_TODAY}}",
+  "owner": "{{OWNER_NAME}}",
+  "schema_version": 1
+}
