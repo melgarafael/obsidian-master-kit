@@ -189,6 +189,33 @@ def build_app(
         finally:
             conn.close()
 
+    @app.get("/api/heatmap/day/{date}")
+    async def api_heatmap_day(date: str, show_sensitive: bool = False):
+        """Top-3 notas tocadas no dia, respeitando redaction por `sensitive`."""
+        conn = connect(vault)
+        try:
+            rows = conn.execute(
+                """
+                SELECT n.id, n.title, n.sensitive, COUNT(*)
+                FROM events e
+                JOIN notes n ON n.id = e.note_id
+                WHERE e.date = ?
+                  AND e.event_type IN ('note_created', 'note_updated', 'link_added')
+                GROUP BY n.id
+                ORDER BY COUNT(*) DESC LIMIT 3
+                """,
+                (date,),
+            ).fetchall()
+            titles = []
+            for _nid, title, sensitive, cnt in rows:
+                if sensitive and not show_sensitive:
+                    titles.append({"title": "[item sensivel]", "count": int(cnt)})
+                else:
+                    titles.append({"title": title or "(sem titulo)", "count": int(cnt)})
+            return {"date": date, "top_titles": titles}
+        finally:
+            conn.close()
+
     @app.get("/api/insights")
     async def api_insights():
         """Narrativas deterministicas (templates, sem LLM)."""

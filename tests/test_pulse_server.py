@@ -181,3 +181,46 @@ def test_dashboard_nao_usa_innerHTML(app_client):
     client, _ = app_client
     r = client.get("/")
     assert "innerHTML" not in r.text
+
+
+def test_api_heatmap_day_retorna_top_titles(app_client, vault):
+    """Drill-down por dia com top-3 notas, redigindo sensitive."""
+    client, token = app_client
+    conn = connect(vault)
+    conn.execute(
+        "INSERT INTO notes (path, title, sensitive, status, indexed_at) "
+        "VALUES (?, ?, ?, 'ativo', datetime('now'))",
+        ("a.md", "Nota A", 0),
+    )
+    conn.execute(
+        "INSERT INTO notes (path, title, sensitive, status, indexed_at) "
+        "VALUES (?, ?, ?, 'ativo', datetime('now'))",
+        ("private.md", "Journal privado", 1),
+    )
+    conn.commit()
+    a_id = conn.execute("SELECT id FROM notes WHERE path='a.md'").fetchone()[0]
+    priv_id = conn.execute("SELECT id FROM notes WHERE path='private.md'").fetchone()[0]
+    today = "2026-04-15"
+    for _ in range(5):
+        conn.execute(
+            "INSERT INTO events (ts, event_type, note_id, date) "
+            "VALUES (datetime('now'), 'note_updated', ?, ?)",
+            (a_id, today),
+        )
+    for _ in range(3):
+        conn.execute(
+            "INSERT INTO events (ts, event_type, note_id, date) "
+            "VALUES (datetime('now'), 'note_updated', ?, ?)",
+            (priv_id, today),
+        )
+    conn.commit()
+    r = client.get(
+        f"/api/heatmap/day/{today}", headers={"X-Pulse-Token": token}
+    )
+    assert r.status_code == 200
+    data = r.json()
+    titles = [t["title"] for t in data["top_titles"]]
+    assert "Nota A" in titles
+    # Sensitive redigido por default
+    assert "Journal privado" not in titles
+    assert "[item sensivel]" in titles
