@@ -1,0 +1,6 @@
+interface:
+  display_name: "Obsidian Master Kit"
+  short_description: "Repo-specific patterns and workflows for obsidian-master-kit"
+  default_prompt: "Use the obsidian-master-kit repo skill to follow existing architecture, testing, and workflow conventions."
+policy:
+  allow_implicit_invocation: true
