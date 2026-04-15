@@ -78,7 +78,8 @@ def test_cmd_status_empty_exits_0(tmp_path, capsys):
 
 
 def test_stub_subcommand_exits_2(tmp_path, capsys):
-    code = migrate.main(["shadow-scan", "--vault", str(tmp_path)])
+    """Subcommands ainda nao implementados retornam exit 2 com guidance."""
+    code = migrate.main(["cluster", "--vault", str(tmp_path)])
     assert code == 2
     err = capsys.readouterr().err
-    assert "Wave 2" in err
+    assert "Wave 3" in err
