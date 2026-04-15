@@ -35,15 +35,15 @@ if str(_REPO_ROOT) not in sys.path:
 from core.db import connect  # noqa: E402
 from core.paths import resolve_vault  # noqa: E402
 
-WAVE_PLAN = {
-    "propose": 6,
-    "report": 6,
-}
+# Todos os sub-comandos tem implementacao real. Stubs foram migrados nas
+# waves 2-6; WAVE_PLAN mantido vazio pra compatibilidade de _stub_payload.
+WAVE_PLAN: dict[str, int] = {}
 
 _CLUSTER_PATH = pathlib.Path(__file__).parent / "cluster.py"
 _DUPLICATES_PATH = pathlib.Path(__file__).parent / "duplicates.py"
 _MOC_AUDIT_PATH = pathlib.Path(__file__).parent / "moc_audit.py"
 _AREA_MISMATCH_PATH = pathlib.Path(__file__).parent / "area_mismatch.py"
+_PROPOSE_PATH = pathlib.Path(__file__).parent / "propose.py"
 
 
 def _emit(payload: dict[str, Any]) -> None:
@@ -207,8 +207,10 @@ def cmd_area_mismatch(args) -> int:
 def cmd_propose(args) -> int:
     vault = resolve_vault(args.vault)
     conn = connect(vault)
-    payload = _stub_payload("propose", vault, conn, args)
-    payload.update({"batches": []})
+    prop = _load_by_path("_organizer_propose", _PROPOSE_PATH)
+    result = prop.propose(conn, dry_run=bool(args.dry_run))
+    payload = _base("propose", vault, conn, args)
+    payload.update(result)
     _emit(payload)
     return 0
 
@@ -216,8 +218,9 @@ def cmd_propose(args) -> int:
 def cmd_report(args) -> int:
     vault = resolve_vault(args.vault)
     conn = connect(vault)
-    payload = _stub_payload("report", vault, conn, args)
-    payload.update({"summary": {}})
+    prop = _load_by_path("_organizer_propose", _PROPOSE_PATH)
+    payload = _base("report", vault, conn, args)
+    payload.update({"summary": prop.summary(conn)})
     _emit(payload)
     return 0
 

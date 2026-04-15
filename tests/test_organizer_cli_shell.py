@@ -114,12 +114,13 @@ def test_area_mismatch_vazio(org, initialized_vault, capsys):
     assert p["count"] == 0
 
 
-def test_propose_stub(org, initialized_vault, capsys):
+def test_propose_vault_vazio_sem_entries(org, initialized_vault, capsys):
     rc, p = _run(org, ["propose", "--vault", str(initialized_vault)], capsys)
     assert rc == 0
     assert p["command"] == "propose"
-    assert p["planned_for_wave"] == 6
     assert p["dry_run"] is True
+    assert p["entry_count"] == 0
+    assert p["batch_id"] is None
 
 
 def test_propose_no_dry_run_flag(org, initialized_vault, capsys):
@@ -130,10 +131,13 @@ def test_propose_no_dry_run_flag(org, initialized_vault, capsys):
     assert p["dry_run"] is False
 
 
-def test_report_stub(org, initialized_vault, capsys):
+def test_report_retorna_summary(org, initialized_vault, capsys):
     rc, p = _run(org, ["report", "--vault", str(initialized_vault)], capsys)
     assert rc == 0
     assert p["command"] == "report"
+    assert "summary" in p
+    # Vault novo sem scan: 0 notas ativas
+    assert p["summary"]["notes_active"] == 0
 
 
 def test_vec_index_reportado(org, initialized_vault, capsys):
