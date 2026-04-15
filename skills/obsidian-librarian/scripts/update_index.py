@@ -22,6 +22,25 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
+# Reuso do parser canonico de Epic 01 (`core.parser.parse_markdown`).
+# Carregamos o submodulo direto via importlib, sem passar pelo package
+# `core/__init__.py` — esse ultimo puxa networkx/model2vec/sqlite-vec, e o
+# librarian historicamente e stdlib-only (pode rodar em vaults v0.1.1 sem
+# as deps pesadas instaladas). `core.parser` depende so de stdlib, entao
+# esse import isolado e seguro.
+import importlib.util as _ilu  # noqa: E402
+
+_CORE_PARSER_PATH = pathlib.Path(__file__).resolve().parents[3] / "core" / "parser.py"
+_spec = _ilu.spec_from_file_location("_obm_core_parser", _CORE_PARSER_PATH)
+if _spec is None or _spec.loader is None:
+    raise SystemExit(f"core/parser.py nao encontrado em {_CORE_PARSER_PATH}")
+_core_parser = _ilu.module_from_spec(_spec)
+# Registra no sys.modules antes do exec: @dataclass precisa resolver
+# cls.__module__ em sys.modules durante a decoracao.
+sys.modules["_obm_core_parser"] = _core_parser
+_spec.loader.exec_module(_core_parser)
+parse_markdown = _core_parser.parse_markdown
+
 CANONICAL_AREAS = {"pessoal", "profissional", "pesquisa", "ai-memory"}
 CANONICAL_TYPES = {
     "nota", "projeto", "pesquisa", "diario", "journaling",
@@ -46,117 +65,12 @@ MARKER_PATH = pathlib.Path(".obsidian-master/marker.json")
 # Files that are "structural" (meta, not content notes) — skip all validation.
 STRUCTURAL_FILES = {CLAUDE_FILENAME, INDEX_FILENAME, README_FILENAME}
 
-FRONTMATTER_RE = re.compile(
-    r"\A---\s*\n(.*?)\n---\s*\n?(.*)\Z", re.DOTALL
-)
-WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
 TAG_IN_BODY_RE = re.compile(r"(?<![\w/])#([a-z0-9][a-z0-9/_-]*)", re.IGNORECASE)
 
 
-# ---------- frontmatter parser (minimal YAML subset) ----------
-
-def _parse_scalar(raw: str) -> Any:
-    raw = raw.strip()
-    if raw == "" or raw == "~" or raw.lower() == "null":
-        return None
-    if (raw.startswith('"') and raw.endswith('"')) or (
-        raw.startswith("'") and raw.endswith("'")
-    ):
-        return raw[1:-1]
-    if re.match(r"^\d{4}-\d{2}-\d{2}$", raw):
-        return raw  # ISO date kept as string
-    if re.match(r"^-?\d+$", raw):
-        return int(raw)
-    if re.match(r"^-?\d*\.\d+$", raw):
-        return float(raw)
-    if raw.lower() in ("true", "false"):
-        return raw.lower() == "true"
-    return raw
-
-
-def _parse_inline_list(raw: str) -> list[Any]:
-    # [a, b, c] or [] — strip brackets, split by comma, parse each
-    inner = raw.strip()
-    if not (inner.startswith("[") and inner.endswith("]")):
-        return [_parse_scalar(raw)]
-    inner = inner[1:-1].strip()
-    if not inner:
-        return []
-    items = []
-    depth = 0
-    cur = []
-    for ch in inner:
-        if ch == "," and depth == 0:
-            items.append("".join(cur).strip())
-            cur = []
-        else:
-            if ch in "[{":
-                depth += 1
-            elif ch in "]}":
-                depth -= 1
-            cur.append(ch)
-    if cur:
-        items.append("".join(cur).strip())
-    return [_parse_scalar(x) for x in items]
-
-
-def parse_frontmatter(text: str) -> tuple[dict, str, list[str]]:
-    """Return (frontmatter_dict, body, errors).
-
-    Handles the subset used by obsidian-master-kit: top-level `key: value` and
-    `key: [inline, list]`, plus multi-line lists:
-
-        tags:
-          - one
-          - two
-    """
-    m = FRONTMATTER_RE.match(text)
-    if not m:
-        return {}, text, ["no frontmatter"]
-    fm_raw, body = m.group(1), m.group(2)
-    errors: list[str] = []
-    data: dict[str, Any] = {}
-
-    lines = fm_raw.split("\n")
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        stripped = line.rstrip()
-        if not stripped.strip() or stripped.lstrip().startswith("#"):
-            i += 1
-            continue
-        if ":" not in stripped:
-            errors.append(f"malformed line: {stripped!r}")
-            i += 1
-            continue
-        key, _, rest = stripped.partition(":")
-        key = key.strip()
-        rest = rest.strip()
-
-        if rest == "":
-            # multi-line list follows
-            items: list[Any] = []
-            j = i + 1
-            while j < len(lines):
-                nxt = lines[j]
-                if nxt.strip().startswith("- "):
-                    items.append(_parse_scalar(nxt.strip()[2:]))
-                    j += 1
-                elif nxt.strip() == "":
-                    j += 1
-                else:
-                    break
-            data[key] = items
-            i = j
-            continue
-
-        if rest.startswith("["):
-            data[key] = _parse_inline_list(rest)
-        else:
-            data[key] = _parse_scalar(rest)
-        i += 1
-
-    return data, body, errors
+# ---------- frontmatter parser ----------
+# Parser foi movido para `core.parser.parse_markdown` (Epic 01). Uso direto
+# via `parse_markdown(text)` em `scan_vault`.
 
 
 # ---------- frontmatter serializer ----------
@@ -247,19 +161,29 @@ def scan_vault(vault: pathlib.Path) -> list[NoteRecord]:
         if "_templates" in rel.parts:
             continue
         text = p.read_text(encoding="utf-8")
-        fm, body, errors = parse_frontmatter(text)
+        note = parse_markdown(text)
+        # Adapter `(fm, body, errors)` para manter o shape historico do
+        # librarian. `core.parser` nao reporta erros lexicais granulares;
+        # quando o frontmatter esta ausente ou inteiramente invalido, sinaliza
+        # `no frontmatter` igual a versao antiga.
+        errors: list[str] = []
+        if not note.frontmatter_dict and note.body == text:
+            errors.append("no frontmatter")
         rec = NoteRecord(
             path=p,
             rel=rel,
-            frontmatter=fm,
-            body=body,
+            frontmatter=dict(note.frontmatter_dict),
+            body=note.body,
             mtime=p.stat().st_mtime,
         )
         # Structural files have no schema contract. Record them (so _INDEX.md
         # can still show them) but don't flag frontmatter absence as an issue.
         if p.name not in STRUCTURAL_FILES:
             rec.issues.extend(errors)
-        rec.outgoing_links = [m for m in WIKILINK_RE.findall(text)]
+        # v0.1.1 tratava embeds como links de saida (o regex antigo capturava
+        # o `[[X]]` interno de `![[X]]`). Preserva esse comportamento juntando
+        # wikilinks e embed targets — mantem detecao de orfas bit-identica.
+        rec.outgoing_links = [w.target for w in note.wikilinks] + list(note.embeds)
         records.append(rec)
     return records
 
