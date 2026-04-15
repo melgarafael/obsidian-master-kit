@@ -36,7 +36,6 @@ from core.db import connect  # noqa: E402
 from core.paths import resolve_vault  # noqa: E402
 
 WAVE_PLAN = {
-    "duplicates": 3,
     "moc-audit": 4,
     "area-mismatch": 5,
     "propose": 6,
@@ -44,6 +43,7 @@ WAVE_PLAN = {
 }
 
 _CLUSTER_PATH = pathlib.Path(__file__).parent / "cluster.py"
+_DUPLICATES_PATH = pathlib.Path(__file__).parent / "duplicates.py"
 
 
 def _emit(payload: dict[str, Any]) -> None:
@@ -133,12 +133,17 @@ def cmd_cluster(args) -> int:
 def cmd_duplicates(args) -> int:
     vault = resolve_vault(args.vault)
     conn = connect(vault)
-    payload = _stub_payload("duplicates", vault, conn, args)
+    dup = _load_by_path("_organizer_duplicates", _DUPLICATES_PATH)
+    pairs = dup.detect_duplicates(conn, min_cos=args.min_cos)
+    saved = dup.save_candidates(conn, pairs)
+    payload = _base("duplicates", vault, conn, args)
     payload.update(
         {
             "min_cos": args.min_cos,
             "interactive": args.interactive,
-            "candidates": [],
+            "candidates": pairs,
+            "count": len(pairs),
+            "persisted": saved,
         }
     )
     _emit(payload)

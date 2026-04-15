@@ -79,12 +79,13 @@ def test_cluster_latest_vazio_antes_de_run(org, initialized_vault, capsys):
     assert p["run_id"] is None
 
 
-def test_duplicates_stub(org, initialized_vault, capsys):
+def test_duplicates_vault_vazio_retorna_zero_candidatos(org, initialized_vault, capsys):
     rc, p = _run(org, ["duplicates", "--vault", str(initialized_vault)], capsys)
     assert rc == 0
     assert p["command"] == "duplicates"
-    assert p["planned_for_wave"] == 3
     assert p["candidates"] == []
+    assert p["count"] == 0
+    assert p["persisted"] == 0
 
 
 def test_duplicates_min_cos_override(org, initialized_vault, capsys):
