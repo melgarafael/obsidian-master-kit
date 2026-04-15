@@ -39,7 +39,12 @@ import subprocess
 import sys
 from typing import Any
 
-__all__ = ["build_prompt", "invoke_llm", "generate_note"]
+__all__ = [
+    "build_prompt",
+    "invoke_llm",
+    "generate_note",
+    "integrate_with_librarian",
+]
 
 
 _KNN_PATH = pathlib.Path(__file__).parent / "knn.py"
@@ -318,6 +323,101 @@ def _infer_area_from_dir(target_dir: pathlib.Path, vault: pathlib.Path) -> str:
     return _AREA_FOLDER_MAP.get(first, first)
 
 
+def _find_area_moc(
+    conn: sqlite3.Connection,
+    vault: pathlib.Path,
+    target_dir: pathlib.Path,
+) -> pathlib.Path | None:
+    """Encontra MOC da area onde a nota gerada vai entrar.
+
+    Prioridade:
+    1. Arquivo `_MOC.md` na propria target_dir (convencao do kit)
+    2. Nota type='moc' na mesma area_id (query no DB)
+    3. None (nenhum MOC encontrado — librarian fara o linking estrutural
+       mais tarde se existir)
+    """
+    direct = target_dir / "_MOC.md"
+    if direct.exists():
+        return direct
+    try:
+        rel = target_dir.relative_to(vault)
+    except ValueError:
+        return None
+    if not rel.parts:
+        return None
+    folder = rel.parts[0]
+    row = conn.execute(
+        """
+        SELECT n.path FROM notes n
+        JOIN areas a ON a.id = n.area_id
+        WHERE a.folder = ?
+          AND n.type = 'moc'
+          AND n.deleted_at IS NULL
+        ORDER BY n.in_degree DESC, n.id ASC
+        LIMIT 1
+        """,
+        (folder,),
+    ).fetchone()
+    if row is None:
+        return None
+    return vault / row[0]
+
+
+def _append_moc_link(moc_path: pathlib.Path, link_stem: str) -> bool:
+    """Adiciona linha `- [[link_stem]]` ao MOC, evitando duplicatas.
+
+    Insere no final do arquivo, sob secao '## Gerados' (cria se nao
+    existir). Retorna True se modificou, False se link ja presente.
+    """
+    text = moc_path.read_text(encoding="utf-8")
+    marker = f"[[{link_stem}]]"
+    if marker in text:
+        return False
+    if not text.endswith("\n"):
+        text += "\n"
+    if "## Gerados" in text:
+        # Insere na secao existente, apos o header
+        text = text.replace("## Gerados\n", f"## Gerados\n- {marker}\n", 1)
+    else:
+        text += f"\n## Gerados\n- {marker}\n"
+    moc_path.write_text(text, encoding="utf-8")
+    return True
+
+
+def integrate_with_librarian(
+    conn: sqlite3.Connection,
+    vault: pathlib.Path,
+    written_path: pathlib.Path,
+    *,
+    embedder=None,
+) -> dict[str, Any]:
+    """Fluxo pos-escrita: liga no MOC da area + roda scan incremental.
+
+    Parametros:
+    - `embedder`: passado direto ao scan. Se None, scan nao re-embeda;
+      a nota gerada ficara sem embedding ate proximo scan completo.
+
+    Retorna `{moc_linked, scan_report}`.
+    """
+    from core.scanner import scan as _scan_fn
+
+    target_dir = written_path.parent
+    moc_path = _find_area_moc(conn, vault, target_dir)
+    moc_linked: str | None = None
+    if moc_path is not None:
+        # Nao linka o proprio MOC em si mesmo (edge case)
+        if moc_path.resolve() != written_path.resolve():
+            changed = _append_moc_link(moc_path, written_path.stem)
+            if changed:
+                moc_linked = str(moc_path.relative_to(vault))
+
+    report = _scan_fn(conn, vault, embedder=embedder)
+    return {
+        "moc_linked": moc_linked,
+        "scan_counts": dict(report.counts),
+    }
+
+
 def generate_note(
     conn: sqlite3.Connection,
     suggestion_id: int,
@@ -326,6 +426,8 @@ def generate_note(
     dry_run: bool = False,
     llm_invoker=invoke_llm,
     source_k: int = _DEFAULT_SOURCE_K,
+    integrate: bool = True,
+    embedder=None,
 ) -> dict[str, Any]:
     """Materializa sugestao em .md. `llm_invoker` parametrizavel pra testes."""
     suggestion = _fetch_suggestion(conn, suggestion_id)
@@ -375,9 +477,19 @@ def generate_note(
         (suggestion_id,),
     )
     conn.commit()
-    return {
+
+    result: dict[str, Any] = {
         "dry_run": False,
         "suggestion_id": suggestion_id,
         "written_path": str(target_path),
         "source_paths": source_paths,
     }
+
+    if integrate:
+        integration = integrate_with_librarian(
+            conn, vault, target_path, embedder=embedder
+        )
+        result["moc_linked"] = integration["moc_linked"]
+        result["scan_counts"] = integration["scan_counts"]
+
+    return result

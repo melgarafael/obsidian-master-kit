@@ -291,3 +291,157 @@ def test_invoke_llm_erro_de_binario_levanta_runtime(gen, monkeypatch):
     monkeypatch.setattr(subprocess, "run", fake_run)
     with pytest.raises(RuntimeError, match="claude"):
         gen.invoke_llm("teste")
+
+
+# ---------- integrate_with_librarian (Wave 5) ----------
+
+
+def _seed_canonical_areas(conn):
+    for slug, label, folder in (
+        ("pessoal", "Pessoal", "00 - Pessoal"),
+        ("profissional", "Profissional", "01 - Profissional"),
+        ("pesquisa", "Pesquisas", "02 - Pesquisas e Estudos"),
+        ("ai-memory", "AI Memory", "03 - Memoria da IA"),
+    ):
+        conn.execute(
+            "INSERT OR IGNORE INTO areas (slug, label, folder, is_canonical, created_at) "
+            "VALUES (?, ?, ?, 1, datetime('now'))",
+            (slug, label, folder),
+        )
+    conn.commit()
+
+
+@pytest.fixture
+def vault_com_moc_area(tmp_path):
+    """Vault com MOC em area seed (pra testar integrate_with_librarian)."""
+    notas = [
+        ("02 - Pesquisas e Estudos/_MOC.md",
+         "---\ntype: moc\n---\n# MOC Pesquisas\n\n- [[hermetismo]]\n"),
+        ("02 - Pesquisas e Estudos/hermetismo.md",
+         "# Hermetismo\nNatureza do ser, principios universais."),
+        ("02 - Pesquisas e Estudos/alquimia.md",
+         "# Alquimia\nTransmutacao interior hermetica."),
+    ]
+    for rel, body in notas:
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    core_cli.main(["init-db", "--vault", str(tmp_path)])
+    conn = connect(tmp_path)
+    _seed_canonical_areas(conn)
+    scan(conn, tmp_path, embedder=_FakeEmbedder())
+    # Insere suggestion bridge
+    h_id = conn.execute(
+        "SELECT id FROM notes WHERE path='02 - Pesquisas e Estudos/hermetismo.md'"
+    ).fetchone()[0]
+    a_id = conn.execute(
+        "SELECT id FROM notes WHERE path='02 - Pesquisas e Estudos/alquimia.md'"
+    ).fetchone()[0]
+    conn.execute(
+        """
+        INSERT INTO suggestions_cache
+          (generated_at, expires_at, kind, target_note_ids, content,
+           reasoning, score, dismissed, acted_on)
+        VALUES (?, ?, 'bridge', ?, ?, ?, 0.4, 0, 0)
+        """,
+        (
+            "2026-04-15T10:00:00+00:00",
+            "2026-04-22T10:00:00+00:00",
+            json.dumps([h_id, a_id]),
+            "ponte",
+            "reasoning",
+        ),
+    )
+    conn.commit()
+    sug_id = conn.execute(
+        "SELECT id FROM suggestions_cache ORDER BY id DESC LIMIT 1"
+    ).fetchone()[0]
+    return tmp_path, conn, sug_id
+
+
+def test_integrate_with_librarian_adiciona_link_ao_moc(gen, vault_com_moc_area):
+    vault, conn, _ = vault_com_moc_area
+    target = vault / "02 - Pesquisas e Estudos" / "nota-gerada-test.md"
+    target.write_text(
+        "---\nstatus: draft\n---\n# Nota gerada teste\ncorpo", encoding="utf-8"
+    )
+    result = gen.integrate_with_librarian(conn, vault, target)
+    assert result["moc_linked"] == "02 - Pesquisas e Estudos/_MOC.md"
+    moc_text = (vault / "02 - Pesquisas e Estudos" / "_MOC.md").read_text(
+        encoding="utf-8"
+    )
+    assert "[[nota-gerada-test]]" in moc_text
+    assert "## Gerados" in moc_text
+
+
+def test_integrate_with_librarian_nao_duplica_link(gen, vault_com_moc_area):
+    vault, conn, _ = vault_com_moc_area
+    target = vault / "02 - Pesquisas e Estudos" / "nota-dedup-test.md"
+    target.write_text(
+        "---\nstatus: draft\n---\n# t\ncorpo", encoding="utf-8"
+    )
+    gen.integrate_with_librarian(conn, vault, target)
+    gen.integrate_with_librarian(conn, vault, target)  # roda 2x
+    moc_text = (vault / "02 - Pesquisas e Estudos" / "_MOC.md").read_text(
+        encoding="utf-8"
+    )
+    assert moc_text.count("[[nota-dedup-test]]") == 1
+
+
+def test_integrate_with_librarian_sem_moc_disponivel(gen, tmp_path):
+    # Vault sem MOC na area — integrate nao quebra, so reporta moc_linked=None
+    (tmp_path / "area-novel").mkdir()
+    (tmp_path / "area-novel" / "alguma.md").write_text("# X\nbody", encoding="utf-8")
+    core_cli.main(["init-db", "--vault", str(tmp_path)])
+    conn = connect(tmp_path)
+    scan(conn, tmp_path, embedder=_FakeEmbedder())
+    target = tmp_path / "area-novel" / "nova-gerada.md"
+    target.write_text(
+        "---\nstatus: draft\n---\n# novo\ncorpo", encoding="utf-8"
+    )
+    result = gen.integrate_with_librarian(conn, tmp_path, target)
+    assert result["moc_linked"] is None
+
+
+def test_generate_note_e2e_suggestion_to_moc_linked(gen, vault_com_moc_area):
+    """E2E: generate real (mock LLM) -> .md escrito + MOC atualizado + scan."""
+    vault, conn, sug_id = vault_com_moc_area
+
+    def _mock(prompt):
+        return "# Ponte Hermetismo x Alquimia\n\n[[Hermetismo]] <-> [[Alquimia]]"
+
+    result = gen.generate_note(
+        conn, sug_id, vault, dry_run=False, llm_invoker=_mock, integrate=True
+    )
+    written = pathlib.Path(result["written_path"])
+    assert written.exists()
+    assert result["moc_linked"] == "02 - Pesquisas e Estudos/_MOC.md"
+    assert "scan_counts" in result
+    moc_text = (vault / "02 - Pesquisas e Estudos" / "_MOC.md").read_text(
+        encoding="utf-8"
+    )
+    assert written.stem in moc_text
+    # Nota nova aparece no DB apos scan
+    row = conn.execute(
+        "SELECT id FROM notes WHERE path = ?",
+        (str(written.relative_to(vault)),),
+    ).fetchone()
+    assert row is not None
+
+
+def test_generate_note_com_integrate_false_nao_mexe_moc(gen, vault_com_moc_area):
+    """Flag integrate=False pula o wiring com librarian (testes unit)."""
+    vault, conn, sug_id = vault_com_moc_area
+    before_moc = (vault / "02 - Pesquisas e Estudos" / "_MOC.md").read_text(
+        encoding="utf-8"
+    )
+    result = gen.generate_note(
+        conn, sug_id, vault, dry_run=False,
+        llm_invoker=lambda p: "[[Hermetismo]]",
+        integrate=False,
+    )
+    assert "moc_linked" not in result
+    after_moc = (vault / "02 - Pesquisas e Estudos" / "_MOC.md").read_text(
+        encoding="utf-8"
+    )
+    assert before_moc == after_moc
