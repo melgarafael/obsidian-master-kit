@@ -212,6 +212,245 @@ def cmd_shadow_scan(args) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# Wave 3: cluster (HDBSCAN + TF-IDF labeling)
+# ---------------------------------------------------------------------------
+def cmd_cluster(args) -> int:
+    vault = pathlib.Path(args.vault).expanduser().resolve()
+    db_path = vault / ".obsidian-master" / "db.sqlite"
+    if not db_path.exists():
+        print("Erro: DB nao existe. Rode 'shadow-scan' primeiro.", file=sys.stderr)
+        return 1
+
+    from core.db import connect
+    conn = connect(vault)
+
+    # Load notes with embeddings
+    notes, embeddings = _load_notes_with_embeddings(conn)
+    if len(notes) < 10:
+        print(f"Erro: so {len(notes)} notas com embedding. Minimo recomendado: 10.",
+              file=sys.stderr)
+        return 1
+
+    # Cluster
+    import numpy as np
+    n = len(notes)
+    min_cluster_size = max(5, n // 200)
+    labels = _run_hdbscan(embeddings, min_cluster_size=min_cluster_size, min_samples=3)
+
+    # Per-cluster summarize
+    cluster_summaries = _summarize_clusters(notes, embeddings, labels, top_k_tokens=8,
+                                              top_k_central=3)
+
+    # Optional AI labeling
+    if args.ai_label:
+        for cs in cluster_summaries:
+            cs["label"] = _ai_label(cs) or cs["label"]
+
+    # Persist
+    run_id = _persist_clusters(conn, cluster_summaries, min_cluster_size=min_cluster_size)
+
+    # Report
+    print(f"HDBSCAN OK. run_id={run_id}")
+    n_noise = int(np.sum(labels == -1))
+    n_clusters = len([c for c in cluster_summaries if c["cluster_label_id"] != -1])
+    print(f"  {n_clusters} clusters + {n_noise} noise (de {n} notas)")
+    print(f"  min_cluster_size={min_cluster_size}, min_samples=3")
+    for cs in cluster_summaries:
+        print(f"  [{cs['cluster_label_id']:>3}] {cs['note_count']:>4} notas — {cs['label']}")
+    return 0
+
+
+def _load_notes_with_embeddings(conn):
+    """Retorna (list[dict(id, path, title)], np.ndarray de shape (N, dim))."""
+    import numpy as np
+    notes = []
+    embs = []
+    vec_loaded = getattr(conn, "vec_loaded", False)
+    if vec_loaded:
+        rows = conn.execute("""
+            SELECT n.id, n.path, n.title, vn.embedding
+            FROM notes n
+            JOIN vec_notes vn ON vn.note_id = n.id
+            WHERE n.deleted_at IS NULL
+        """).fetchall()
+        for nid, path, title, emb_bytes in rows:
+            notes.append({"id": nid, "path": path, "title": title})
+            embs.append(np.frombuffer(emb_bytes, dtype=np.float32))
+    else:
+        rows = conn.execute("""
+            SELECT n.id, n.path, n.title, neb.vec
+            FROM notes n
+            JOIN notes_embedding_blob neb ON neb.note_id = n.id
+            WHERE n.deleted_at IS NULL
+        """).fetchall()
+        for nid, path, title, vec_bytes in rows:
+            notes.append({"id": nid, "path": path, "title": title})
+            embs.append(np.frombuffer(vec_bytes, dtype=np.float32))
+    if not embs:
+        return [], np.zeros((0, 0), dtype=np.float32)
+    return notes, np.vstack(embs)
+
+
+def _run_hdbscan(embeddings, *, min_cluster_size: int, min_samples: int):
+    from sklearn.cluster import HDBSCAN
+    model = HDBSCAN(
+        min_cluster_size=min_cluster_size,
+        min_samples=min_samples,
+        metric="euclidean",  # equivalente a cosine em L2-normalized vectors (Epic 01)
+    )
+    return model.fit_predict(embeddings)
+
+
+def _summarize_clusters(notes, embeddings, labels, *, top_k_tokens: int, top_k_central: int):
+    """Para cada cluster (!=-1), extrai top tokens TF-IDF + notas centrais + label."""
+    import numpy as np
+    from sklearn.feature_extraction.text import TfidfVectorizer
+
+    summaries = []
+    unique_labels = sorted({int(l) for l in labels if l != -1})
+    if not unique_labels:
+        return summaries
+
+    titles = [n["title"] or "" for n in notes]
+    stopwords = _stopwords_pt_br_en()
+    vec = TfidfVectorizer(
+        max_features=2000,
+        ngram_range=(1, 2),
+        lowercase=True,
+        stop_words=list(stopwords),
+        token_pattern=r"(?u)\b[a-zA-ZÀ-ÿ][a-zA-ZÀ-ÿ\-']{2,}\b",
+    )
+    try:
+        tfidf = vec.fit_transform(titles)
+        feature_names = vec.get_feature_names_out()
+    except ValueError:
+        tfidf = None
+        feature_names = []
+
+    for cl in unique_labels:
+        idx = np.where(labels == cl)[0]
+        cluster_embs = embeddings[idx]
+        cluster_notes = [notes[i] for i in idx]
+        centroid = cluster_embs.mean(axis=0)
+        centroid = centroid / (np.linalg.norm(centroid) + 1e-9)
+        dists = np.linalg.norm(cluster_embs - centroid, axis=1)
+        central_order = np.argsort(dists)
+        central = [cluster_notes[j] for j in central_order[:top_k_central]]
+        central_distances = [float(dists[j]) for j in central_order[:top_k_central]]
+
+        top_tokens = []
+        if tfidf is not None and len(feature_names) > 0:
+            cluster_tfidf = tfidf[idx].mean(axis=0)
+            arr = np.asarray(cluster_tfidf).flatten()
+            order = arr.argsort()[::-1]
+            top_tokens = [str(feature_names[k]) for k in order[:top_k_tokens] if arr[k] > 0]
+
+        label_parts = []
+        if top_tokens:
+            label_parts.append(" / ".join(top_tokens[:3]))
+        if central:
+            label_parts.append(f"(ex: {central[0]['title'][:40]})")
+        label = " ".join(label_parts) or f"cluster-{cl}"
+
+        summaries.append({
+            "cluster_label_id": int(cl),
+            "label": label,
+            "label_source": "auto_tfidf",
+            "note_count": len(idx),
+            "note_ids": [int(n["id"]) for n in cluster_notes],
+            "top_tokens": top_tokens,
+            "central_note_ids": [int(n["id"]) for n in central],
+            "central_distances": central_distances,
+        })
+    return summaries
+
+
+def _persist_clusters(conn, summaries, *, min_cluster_size: int) -> str:
+    run_id = _dt.datetime.now().strftime("hdbscan-%Y%m%d-%H%M%S")
+    now = _dt.datetime.now().astimezone().isoformat(timespec="seconds")
+
+    with conn:
+        for cs in summaries:
+            cur = conn.execute(
+                """INSERT INTO clusters(run_id, label, label_source, algorithm,
+                                         similarity_threshold, note_count, created_at)
+                   VALUES (?, ?, ?, 'hdbscan', ?, ?, ?)""",
+                (run_id, cs["label"], cs["label_source"],
+                 float(min_cluster_size), cs["note_count"], now),
+            )
+            cluster_id = cur.lastrowid
+            # Build distance list: central notes get real distances, others get None.
+            central_ids = cs["central_note_ids"]
+            central_dists = cs["central_distances"]
+            central_map = {nid: d for nid, d in zip(central_ids, central_dists)}
+            for nid in cs["note_ids"]:
+                conn.execute(
+                    "INSERT INTO cluster_notes(cluster_id, note_id, distance_to_centroid) "
+                    "VALUES (?, ?, ?)",
+                    (cluster_id, nid, central_map.get(nid)),
+                )
+    return run_id
+
+
+def _stopwords_pt_br_en():
+    """Lista curada de stopwords pt-br + en pra TF-IDF."""
+    pt_br = {
+        "a","à","ao","aos","aquela","aquelas","aquele","aqueles","aquilo","as","até",
+        "com","como","da","das","de","dela","delas","dele","deles","depois","do","dos",
+        "e","é","ela","elas","ele","eles","em","entre","era","eram","essa","essas",
+        "esse","esses","esta","está","estamos","estão","estas","este","esteja","estejam",
+        "estejamos","estes","esteve","estive","estivemos","estiver","estivera","estiveram",
+        "estiverem","estivermos","estivesse","estivessem","estivéssemos","estou","eu",
+        "foi","fomos","for","fora","foram","forem","formos","fosse","fossem","fôssemos",
+        "fui","há","haja","hajam","hajamos","hão","havemos","haver","havia","houve",
+        "houvemos","houver","houvera","houveram","houverão","houverei","houverem",
+        "houveremos","houveria","houveriam","houveríamos","houvermos","houvesse",
+        "houvessem","houvéssemos","isso","isto","já","lhe","lhes","mais","mas","me",
+        "mesmo","meu","meus","minha","minhas","muito","na","não","nas","nem","no",
+        "nos","nós","nossa","nossas","nosso","nossos","num","numa","o","os","ou",
+        "para","pela","pelas","pelo","pelos","por","qual","quando","que","quem","são",
+        "se","seja","sejam","sejamos","sem","ser","será","serão","serei","seremos",
+        "seria","seriam","seríamos","seu","seus","só","somos","sou","sua","suas",
+        "também","te","tem","tém","temos","tenha","tenham","tenhamos","tenho","ter",
+        "terá","terão","terei","teremos","teria","teriam","teríamos","teu","teus",
+        "teve","tinha","tinham","tínhamos","tive","tivemos","tiver","tivera","tiveram",
+        "tiverem","tivermos","tivesse","tivessem","tivéssemos","tu","tua","tuas","um",
+        "uma","você","vocês","vos",
+    }
+    en = {
+        "a","an","the","and","or","but","if","is","are","was","were","be","been","being",
+        "to","of","in","on","at","for","with","by","from","as","about","into","through",
+        "it","its","i","you","he","she","we","they","this","that","these","those","there",
+    }
+    return pt_br | en
+
+
+def _ai_label(cluster_summary: dict) -> str | None:
+    """Invoca claude CLI com prompt curto pra gerar label. None se falhar."""
+    import subprocess
+    claude_bin = shutil.which("claude")
+    if not claude_bin:
+        return None
+    prompt = (
+        "Gere um label curto (3-6 palavras, em pt-br) pra esse cluster de notas "
+        "Obsidian. Responda SO o label, sem explicacao.\n\n"
+        f"Top tokens TF-IDF: {', '.join(cluster_summary['top_tokens'][:8])}\n"
+        f"Total de notas: {cluster_summary['note_count']}\n"
+        f"Label heuristico atual: {cluster_summary['label']}\n"
+    )
+    try:
+        r = subprocess.run(
+            [claude_bin, "-p", prompt],
+            capture_output=True, text=True, timeout=30,
+        )
+        if r.returncode == 0:
+            return r.stdout.strip().split("\n")[0][:100]
+    except Exception:
+        pass
+    return None
+
+
 def _stub(wave: int, cmd: str):
     """Gera um handler stub pra subcommand nao implementado ainda."""
     def handler(args) -> int:
@@ -252,9 +491,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_ss.set_defaults(func=cmd_shadow_scan)
 
+    # Wave 3: cluster
+    p_cl = sub.add_parser("cluster", help="HDBSCAN sobre embeddings + labels TF-IDF")
+    p_cl.add_argument("--vault", required=True)
+    p_cl.add_argument(
+        "--ai-label", action="store_true",
+        help="Invoca Claude CLI pra labels mais descritivos (opcional)",
+    )
+    p_cl.set_defaults(func=cmd_cluster)
+
     # Stubs pras proximas waves
     for (w, name, help_text) in [
-        (3, "cluster",     "HDBSCAN sobre embeddings + labels de cluster"),
         (4, "propose",     "Gera migration-proposal.md + CLAUDE.md preview"),
         (5, "plan",        "Popula migration_plan em lotes de 20"),
         (5, "approve",     "Approval interativo por batch"),
