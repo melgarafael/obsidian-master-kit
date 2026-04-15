@@ -71,3 +71,20 @@ addopts = "-ra"
 markers = [
     "slow: marks tests as slow (model loading, benchmarks). Skip with '-m \"not slow\"'",
 ]
+
+[tool.coverage.run]
+source = ["core"]
+branch = true
+omit = [
+    "core/migrations/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+show_missing = true
+skip_covered = false
