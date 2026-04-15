@@ -56,42 +56,80 @@
 
 ### Story S03 — Scanner incremental com delta em 3 níveis
 
-**Descrição**: Implementar `core/scanner.py:scan(conn, vault_path, embedder)`. Walk recursivo do vault respeitando ignore patterns (`.obsidian/`, `.trash/`, `.obsidian-master/`, `_templates/`, `node_modules/`, `.git/`, `.DS_Store`, `*.backup-*`, extensível via `.obsidian-master/ignore.txt`). Para cada `.md`:
+**Descrição**: Implementar `core/scanner.py`. Duas APIs: `scan()` (vault inteiro) e `scan_single_file()` (um arquivo só, pro hook PostToolUse). Walk recursivo do vault respeitando ignore patterns (`.obsidian/`, `.trash/`, `.obsidian-master/`, `_templates/`, `node_modules/`, `.git/`, `.DS_Store`, `*.backup-*`, extensível via `.obsidian-master/ignore.txt`). Para cada `.md`:
 
 1. **Nível 1 (mtime)**: se `stat.mtime == notes.mtime` no DB, skip
 2. **Nível 2 (hash)**: lê arquivo, SHA256 do body; se hash bate, atualiza só `mtime` e passa
-3. **Nível 3 (reparse)**: chama `parser.parse_markdown`, atualiza `notes` + `note_tags` + `aliases` + `links`, emite `events(note_created|note_updated)`
+3. **Nível 3 (reparse)**: chama `parser.parse_markdown`, atualiza `notes` + `note_tags` + `aliases` + `links`
 
-Re-embedding condicional: só se body_hash mudou E (`|Δword_count|/old > 15%` OU título mudou OU primeiros 500 chars mudaram). Deleções: notas no DB sem arquivo no disco → `deleted_at=now()` + emite `note_deleted`.
+Re-embedding condicional: só se body_hash mudou E (`|Δword_count|/old > 15%` OU título mudou OU primeiros 500 chars mudaram). Deleções (apenas em `scan()` completo): notas no DB sem arquivo no disco → `deleted_at=now()`.
+
+**Delta explícito** — retorno per-path:
+
+```python
+@dataclass
+class NoteChange:
+    path: Path
+    note_id: int | None  # None se novo antes de commit
+    status: Literal['created', 'updated', 'deleted', 'unchanged']
+    body_hash_before: str | None
+    body_hash_after: str | None
+    links_diff: dict[str, list]  # {'added': [...], 'removed': [...]}
+
+@dataclass
+class ScanReport:
+    counts: dict[str, int]  # {'created': N, 'updated': N, 'deleted': N, 'skipped': N}
+    changes: list[NoteChange]  # per-path detalhado
+    duration_ms: int
+```
+
+**Escrita de `events`**: o scanner **NÃO emite events** diretamente. Consumidores (librarian, migrate) chamam `scan()` ou `scan_single_file()`, iteram `report.changes` e decidem que events gravar. Isso mantém `core/scanner` agnóstico de semântica de eventos.
 
 **Critérios de aceitação**:
 - Scan completo de vault com 2000 notas termina em < 30s (CPU moderna)
 - Scan subsequente sem mudanças termina em < 2s (apenas stat checks)
+- `scan_single_file(conn, vault, path)` termina em < 80ms em nota típica (2-10KB), incluindo DB write
+- `scan_single_file` com path deletado marca `deleted_at` e retorna `NoteChange(status='deleted')`
 - Reimport após `UPDATE notes SET body_hash='bogus'` detecta e reparseia
 - Links quebrados são registrados em `links` com `to_note_id=NULL` e `to_target` preservado
 - Ignore patterns funcionam (test em fixture com `.obsidian/` e `node_modules/`)
+- `report.changes` inclui 1 entrada por arquivo tocado, com `links_diff` preenchido
 
 **Contratos expostos**:
 - `core.scanner.scan(conn, vault_path, embedder=None) -> ScanReport`
-- `core.scanner.ScanReport` dataclass com counts (created/updated/deleted/skipped)
+- `core.scanner.scan_single_file(conn, vault_path, file_path, embedder=None) -> NoteChange`
+- `core.scanner.NoteChange` + `core.scanner.ScanReport` dataclasses
 
 ---
 
 ### Story S04 — Wrapper de embeddings (Model2Vec + fallback)
 
-**Descrição**: Implementar `core/embeddings.py`. Definir Protocol `Embedder` com `model_name: str`, `dim: int`, `embed(texts: list[str]) -> np.ndarray`. Implementação default `Model2VecEmbedder` usando `model2vec` lib, modelo `static-similarity-mrl-multilingual-v1` truncado a 256 dimensões via MRL. Baixar modelo on-install (uma vez, cache em `~/.cache/model2vec/`). Serialização: `pack(vec) -> bytes` (float32.tobytes() = 1024 bytes), `unpack(blob, dim=256) -> np.ndarray`.
+**Descrição**: Implementar `core/embeddings.py`. Definir Protocol `Embedder` com `model_name: str`, `dim: int`, `embed(texts: list[str]) -> np.ndarray`. Implementação default `Model2VecEmbedder` usando `model2vec>=0.8.1` (API atual; versão 0.4 do BRIEF está outdated), modelo `sentence-transformers/static-similarity-mrl-multilingual-v1`.
+
+**Truncamento MRL pra 256 dims**: na API 0.8.1, não existe `output_dims=` — trunca manualmente via slice `v[:, :256]` **seguido de L2-normalize** (`v = v / np.linalg.norm(v, axis=1, keepdims=True)`). Esse é contrato obrigatório:
+
+**Todos os embeddings retornados pelo `Embedder` são L2-normalized.** Consequências:
+- Cosine similarity == dot product (mais rápido downstream)
+- sqlite-vec `vec_distance_cosine` funciona previsivelmente
+- Epic 04/05/06 não precisam normalizar novamente
 
 Configuração via env var `EMBEDDING_MODEL` (default `model2vec-mrl-256`). Swap pra `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` via `PARAPHRASE_FALLBACK=1`.
 
+**Thresholds de similaridade** (NÃO implementados aqui, mas documentar no docstring pra downstream usar): como Model2Vec static comprime o range de cosine, os thresholds de duplicata/bridge/orphan são configuráveis em Epic 04/05/06 via env vars com defaults calibrados pra Model2Vec (não MiniLM). Ver Epic 04/05/06 pros valores específicos.
+
+Serialização: `pack(vec) -> bytes` (float32.tobytes() = 1024 bytes), `unpack(blob, dim=256) -> np.ndarray`.
+
 **Critérios de aceitação**:
 - `Model2VecEmbedder().embed(["texto"]).shape == (1, 256)`
+- Todos os vetores retornados têm `np.linalg.norm(v) ≈ 1.0` (tolerância 1e-5)
 - `pack(vec)` retorna exatamente 1024 bytes para 256 dims float32
 - `unpack(pack(v))` devolve array bit-idêntico
 - Swap de modelo via config funciona e dispara re-embed total (scanner detecta `embedding_model` divergente em `notes`)
 - Batch de 64 textos em < 2s em CPU moderna
+- Teste pt-br real: 2 frases relacionadas dão `cos > 0.3`; não-relacionadas `cos < 0.1` (calibração inicial pra Rafael ajustar thresholds downstream)
 
 **Contratos expostos**:
-- `core.embeddings.Embedder` Protocol
+- `core.embeddings.Embedder` Protocol — **retorno sempre L2-normalized**
 - `core.embeddings.Model2VecEmbedder` default
 - `core.embeddings.pack(vec) -> bytes`
 - `core.embeddings.unpack(blob, dim) -> np.ndarray`
@@ -174,7 +212,7 @@ Vault path padrão: pwd se tem `.obsidian-master/marker.json` (qualquer ancestra
 ## Deps (from the main stack)
 
 Adicionar ao `pyproject.toml`:
-- `model2vec>=0.4.0`
+- `model2vec>=0.8.1,<1.0` (atualizado do BRIEF v1.0.0 que listava 0.4.0 — API da 0.8.1 é diferente)
 - `sqlite-vec>=0.1.3`
 - `networkx>=3.3`
 - `numpy>=1.26.4`

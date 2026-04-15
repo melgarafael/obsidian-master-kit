@@ -107,6 +107,15 @@ score = (
 )
 ```
 
+**Thresholds de similaridade configuráveis** (BRIEF §3.3 listava 0.7/0.75 ancorados em MiniLM; Model2Vec static comprime range):
+
+```
+BRIDGE_MIN_COS=0.40       # pontes semânticas (par sem link direto)
+ORPHAN_PROXIMITY_COS=0.45 # ranking de rediscovery
+```
+
+Env vars lidas na inicialização, defaults conservadores. Rafael calibra empírico.
+
 Anti-repetição:
 
 - Suggestion já mostrada nos últimos 7 dias sem ação: `score *= 0.5`
@@ -119,6 +128,7 @@ Top 10 por dia, no máximo. Cada uma com `reasoning` pré-renderizado.
 - 10 sugestões geradas em 4 kinds diferentes (diversidade garantida por código)
 - Dismissed 2× consecutivas → kind aparece só após 7 dias
 - Reasoning nunca é `NULL` (schema constraint + lógica garantem)
+- Threshold env vars mudam número de candidatos detectados (validação que config funciona)
 
 ---
 

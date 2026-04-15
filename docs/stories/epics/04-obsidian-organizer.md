@@ -53,17 +53,23 @@ Grava em `clusters` com `run_id=uuid4()` e timestamp.
 
 ---
 
-### Story S03 — Duplicate detection (cos ≥ 0.92)
+### Story S03 — Duplicate detection (threshold configurável)
 
-**Descrição**: Detecta pares de notas com cosine ≥ 0.92 que são candidatos a duplicata de conceito (ex: "Cabala" e "Qabalah"). Query via `sqlite-vec MATCH` com threshold. Filtra pares triviais (uma é sub-página/MOC da outra, mesmo título+sufixo numérico).
+**Descrição**: Detecta pares de notas com cosine ≥ `DUPLICATE_MIN_COS` (env var) que são candidatos a duplicata de conceito (ex: "Cabala" e "Qabalah").
+
+**Default calibrado pra Model2Vec**: `DUPLICATE_MIN_COS=0.70` (o BRIEF original listava 0.92, valor ancorado em MiniLM fallback — empiricamente Model2Vec static comprime range e 0.92 nunca dispara). Rafael calibra empírico com o vault real nos primeiros dias.
+
+Query via `sqlite-vec MATCH` com threshold. Filtra pares triviais (uma é sub-página/MOC da outra, mesmo título + sufixo numérico).
 
 Grava em `duplicate_candidates(note_a_id, note_b_id, cosine_similarity, detected_at, verdict=NULL)`.
 
 **Critérios de aceitação**:
 - `organizer duplicates` gera lista com pares e cosine
+- Threshold lido de `DUPLICATE_MIN_COS` env var (default 0.70)
 - CLI interativo oferece verdict: `merge | keep_both | not_duplicate`
 - Verdict grava em DB; não executa merge automaticamente
 - Não lista pares já julgados nas últimas 30 runs
+- Teste: `DUPLICATE_MIN_COS=0.5` detecta mais candidatos que default (validação que config funciona)
 
 ---
 

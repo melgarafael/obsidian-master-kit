@@ -32,37 +32,70 @@
 
 ### Story S02 — Escrever `events` em toda scan run
 
-**Descrição**: Cada vez que `update_index.py` roda, abre conexão via `core.db.connect` e escreve:
+**Descrição**: Cada vez que `update_index.py` roda, abre conexão via `core.db.connect`, chama `core.scanner.scan(conn, vault)` e consome o `ScanReport` retornado:
 
-- `events(event_type='scan_run', metadata={triggered_by: 'hook'|'manual'|'init'})`
-- Para cada nota criada/atualizada/deletada detectada: `events(note_created|note_updated|note_deleted, note_id, ts=now)`
-- Para cada link adicionado/removido: `events(link_added|link_removed)`
+```python
+report = core.scanner.scan(conn, vault_path, embedder)
 
-Evento é idempotente: se o mesmo `(note_id, event_type, ts)` já existe no último minuto, não duplica.
+# Event do run em si
+emit_event(conn, event_type='scan_run', metadata={'triggered_by': trigger})
+
+# Per-note events traduzidos do delta explícito
+for change in report.changes:
+    if change.status == 'created':
+        emit_event(conn, event_type='note_created', note_id=change.note_id)
+    elif change.status == 'updated':
+        emit_event(conn, event_type='note_updated', note_id=change.note_id)
+    elif change.status == 'deleted':
+        emit_event(conn, event_type='note_deleted', note_id=change.note_id)
+    # link diffs do próprio change
+    for added in change.links_diff.get('added', []):
+        emit_event(conn, event_type='link_added', note_id=change.note_id, metadata={'to': added})
+    for removed in change.links_diff.get('removed', []):
+        emit_event(conn, event_type='link_removed', note_id=change.note_id, metadata={'to': removed})
+```
+
+**Dedup app-level** (em `emit_event`): antes de inserir, `SELECT MAX(ts) FROM events WHERE note_id=? AND event_type=?`. Se `now - max_ts < 60s`, skip. Evita UNIQUE constraint com rounding de timestamp, que é frágil com timezone.
 
 **Critérios de aceitação**:
 - Após `sync`, SELECT events WHERE event_type='scan_run' retorna 1 linha nova
 - Adicionar nota nova gera 1 evento `note_created`
 - Deletar nota gera 1 evento `note_deleted` + `deleted_at` atualizado em `notes`
-- Hook rodando 3× em 10s cria apenas 1 `scan_run` (dedup)
+- Hook rodando 3× em 10s cria apenas 1 `scan_run` (dedup app-level)
+- Link adicionado entre A e B gera event `link_added` para `note_id=A` com `metadata.to='B'`
 
 ---
 
 ### Story S03 — `_INDEX.md` via DB (não via regex direto)
 
-**Descrição**: Refatorar a geração do `_INDEX.md` pra consultar o DB em vez de varrer arquivos. Estrutura do index atualizada:
+**Descrição**: Refatorar a geração do `_INDEX.md` pra consultar o DB em vez de varrer arquivos. Estrutura do index atualizada com filtros de privacidade (`_INDEX.md` é plaintext na raiz do vault — potencialmente git-commitado, portanto não vaza títulos sensíveis):
 
-- Contagem por área: `SELECT area, COUNT(*) FROM notes GROUP BY area`
-- Últimas 10 notas: `ORDER BY mtime DESC LIMIT 10`
-- MOCs ativos: `WHERE name LIKE '_MOC%' OR pagerank > threshold`
-- Notas órfãs: `LEFT JOIN links ON to_note_id IS NULL AND from_note_id IS NULL`
+- **Contagem por área** (agregada, sem vazamento): `SELECT a.label, COUNT(n.id) FROM notes n JOIN areas a ON n.area_id=a.id WHERE n.deleted_at IS NULL GROUP BY a.id`
+- **Últimas 10 adições** (com título — exclui sensitive): `SELECT title, path FROM notes WHERE sensitive=0 AND deleted_at IS NULL ORDER BY mtime DESC LIMIT 10`
+- **MOCs ativos** (estruturais, incluídos): filtro `path LIKE '%_MOC.md' OR pagerank > threshold`
+- **Notas órfãs** (sem wiki-link de **saída**, exclui sensitive): 
+  ```sql
+  SELECT n.id, n.path FROM notes n
+  LEFT JOIN links l ON l.from_note_id = n.id
+  WHERE l.id IS NULL
+    AND n.deleted_at IS NULL
+    AND n.sensitive = 0
+    AND n.path NOT LIKE '%/_templates/%'
+    AND n.path NOT LIKE '%_MOC.md'
+  ```
+  Semântica de "órfã" consistente com librarian v0.1.1 atual = sem link de saída.
+- **Projetos ativos**: exclui se a área do projeto tem `sensitive=1`
+
+Notas sensitive ainda aparecem em contagens agregadas mas nunca com título visível. Relatório em `_INDEX.md` pode anotar: *"Órfãs: 12 (3 sensíveis omitidas)"*.
 
 DB vira fonte de verdade pras contagens; filesystem é fonte de verdade pra conteúdo.
 
 **Critérios de aceitação**:
-- `_INDEX.md` renderizado via DB é visualmente idêntico ao anterior (diff manual)
+- `_INDEX.md` renderizado via DB é visualmente idêntico ao anterior em vaults sem notas sensíveis (diff manual)
+- Notas em pastas blacklisted (`sensitive=1`) não aparecem por título em nenhuma listagem
 - Performance: renderização em < 200ms para vault de 2000 notas
-- Contagens batem com `find . -name '*.md' | wc -l` do filesystem (tolerância zero)
+- Contagens agregadas batem com `find . -name '*.md' | wc -l` do filesystem (tolerância zero)
+- Teste: criar nota em `00 - Pessoal/Journaling/` com `sensitive=1`, regenerar index, verificar que título não aparece mas contagem sobe
 
 ---
 

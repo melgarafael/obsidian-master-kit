@@ -16,5 +16,5 @@ venv/
 /tmp-vault-test/
 
 # Metadados de execucao (epic-executor, tasks etc.)
-.epic-executor/
 .claude/
+.epic-executor/

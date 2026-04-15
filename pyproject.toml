@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "obsidian-master-kit"
+version = "0.1.0"
+description = "Kit de skills que transforma uma pasta vazia num vault Obsidian profissional — segundo cérebro + memória persistente para IA."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Rafael Melgaco", email = "rafael@maudibrasil.com.br" },
+]
+keywords = [
+    "obsidian",
+    "second-brain",
+    "knowledge-management",
+    "ai-memory",
+    "pt-br",
+    "markdown",
+    "zettelkasten",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Text Processing :: Markup :: Markdown",
+]
+dependencies = [
+    "model2vec>=0.4.0",
+    "sqlite-vec>=0.1.3",
+    "networkx>=3.3",
+    "numpy>=1.26.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/melgarafael/obsidian-master-kit"
+Repository = "https://github.com/melgarafael/obsidian-master-kit"
+
+[project.scripts]
+obsidian-master = "core.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["core*"]
+exclude = ["tests*", "skills*", "hooks*", "commands*", "docs*"]
+
+[tool.setuptools.package-data]
+"core.migrations" = ["*.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-ra"
