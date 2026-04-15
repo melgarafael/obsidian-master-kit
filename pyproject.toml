@@ -33,7 +33,7 @@ classifiers = [
     "Topic :: Text Processing :: Markup :: Markdown",
 ]
 dependencies = [
-    "model2vec>=0.4.0",
+    "model2vec>=0.8.1",
     "sqlite-vec>=0.1.3",
     "networkx>=3.3",
     "numpy>=1.26.4",
@@ -43,6 +43,9 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-cov>=4.1",
+]
+fallback = [
+    "sentence-transformers>=2.2",
 ]
 
 [project.urls]
@@ -64,3 +67,6 @@ exclude = ["tests*", "skills*", "hooks*", "commands*", "docs*"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-ra"
+markers = [
+    "slow: marks tests as slow (model loading, benchmarks). Skip with '-m \"not slow\"'",
+]
