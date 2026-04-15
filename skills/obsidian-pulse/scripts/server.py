@@ -118,19 +118,25 @@ def build_app(
             conn.close()
 
     @app.get("/api/suggestions")
-    async def api_suggestions(limit: int = 10):
+    async def api_suggestions(limit: int = 10, show_sensitive: bool = False):
         conn = connect(vault)
         try:
             ranking = _load("_pulse_ranking", _RANKING_PATH)
+            privacy = _load("_pulse_privacy", _PRIVACY_PATH)
             top = ranking.select_top(conn, limit=limit)
-            return {"suggestions": top, "count": len(top)}
+            redacted = [
+                privacy.redact_entry(conn, s, show_sensitive=show_sensitive)
+                for s in top
+            ]
+            return {"suggestions": redacted, "count": len(redacted)}
         finally:
             conn.close()
 
     @app.get("/api/alerts")
-    async def api_alerts():
+    async def api_alerts(show_sensitive: bool = False):
         conn = connect(vault)
         try:
+            privacy = _load("_pulse_privacy", _PRIVACY_PATH)
             rows = conn.execute(
                 """
                 SELECT id, kind, target_note_ids, content, reasoning, severity,
@@ -143,21 +149,23 @@ def build_app(
                 LIMIT 10
                 """
             ).fetchall()
-            return {
-                "alerts": [
-                    {
-                        "id": r[0],
-                        "kind": r[1],
-                        "target_note_ids": json.loads(r[2]),
-                        "content": r[3],
-                        "reasoning": r[4],
-                        "severity": r[5],
-                        "generated_at": r[6],
-                    }
-                    for r in rows
-                ],
-                "count": len(rows),
-            }
+            alerts = [
+                {
+                    "id": r[0],
+                    "kind": r[1],
+                    "target_note_ids": json.loads(r[2]),
+                    "content": r[3],
+                    "reasoning": r[4],
+                    "severity": r[5],
+                    "generated_at": r[6],
+                }
+                for r in rows
+            ]
+            redacted = [
+                privacy.redact_entry(conn, a, show_sensitive=show_sensitive)
+                for a in alerts
+            ]
+            return {"alerts": redacted, "count": len(redacted)}
         finally:
             conn.close()
 
