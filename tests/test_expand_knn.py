@@ -30,9 +30,14 @@ _KNN_PATH = (
 
 
 def _load_knn():
-    spec = importlib.util.spec_from_file_location("expand_knn", _KNN_PATH)
+    import sys as _sys
+    name = "expand_knn"
+    if name in _sys.modules:
+        return _sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, _KNN_PATH)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    _sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 

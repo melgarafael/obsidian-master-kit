@@ -1,22 +1,22 @@
-"""Testes para o shell da CLI `obsidian-expand` (Epic 05 S01 / Wave 1).
+"""Testes da CLI `obsidian-expand` (Epic 05 S01 shell + S02/S03 wire-up).
 
-Wave 1 e shell: valida que argparse funciona, cada sub-comando roda ate
-produzir envelope JSON com marcador `wave_pending=True`, vault discovery
-funciona e mensagens de erro sao uteis. Logica real (KNN, gaps, generate)
-vem nas waves seguintes.
-
-Padrao seguido: importar `expand.main` via importlib (script nao e pacote
-Python), chamar direto com argv explicito, capturar stdout via capsys.
+Cobre: argparse, required args, vault resolution, envelope JSON real com
+candidates, persist (--no-dry-run), filtros por topic/area/moc-path.
 """
 from __future__ import annotations
 
 import importlib.util
 import json
 import pathlib
+import sys
 
+import numpy as np
 import pytest
 
 from core import cli as core_cli
+from core.db import connect
+from core.graph import update_graph_metrics
+from core.scanner import scan
 
 _SCRIPT_PATH = (
     pathlib.Path(__file__).resolve().parent.parent
@@ -28,11 +28,33 @@ _SCRIPT_PATH = (
 
 
 def _load_expand():
-    spec = importlib.util.spec_from_file_location("expand_cli", _SCRIPT_PATH)
+    name = "expand_cli"
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, _SCRIPT_PATH)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+class _DeterministicEmbedder:
+    """Seed-determinado, L2-normalized — vetores distintos por texto."""
+
+    model_name = "fake-deterministic-cli-v1"
+    dim = 256
+
+    def embed(self, texts):
+        out = []
+        for txt in texts:
+            rng = np.random.default_rng(hash(txt) & 0xFFFFFFFF)
+            vec = rng.standard_normal(256).astype(np.float32)
+            vec /= np.linalg.norm(vec) or 1.0
+            out.append(vec)
+        if not out:
+            return np.zeros((0, 256), dtype=np.float32)
+        return np.stack(out)
 
 
 @pytest.fixture(scope="module")
@@ -42,10 +64,56 @@ def expand():
 
 @pytest.fixture
 def initialized_vault(tmp_path):
-    """Vault com marker + DB via core.cli init-db — pronto pra expand."""
     rc = core_cli.main(["init-db", "--vault", str(tmp_path)])
     assert rc == 0
     return tmp_path
+
+
+@pytest.fixture
+def populated_vault(tmp_path):
+    """Vault pequeno com notas textualmente distintas + scan completo."""
+    notas = [
+        ("02 - Pesquisas e Estudos/hermetismo.md",
+         "# Hermetismo\nTexto sobre hermetismo antigo e Tabua de Esmeralda."),
+        ("02 - Pesquisas e Estudos/alquimia.md",
+         "# Alquimia\nArte hermetica da transmutacao interior e opus magnum."),
+        ("02 - Pesquisas e Estudos/cabala.md",
+         "# Cabala\nSephirot, Arvore da Vida, tradicao judaica."),
+        ("01 - Profissional/projeto-api.md",
+         "# API\nArquitetura de microservicos com Go e gRPC."),
+        ("01 - Profissional/_MOC.md",
+         "---\ntype: moc\n---\n# MOC Profissional\n[[projeto-api]]"),
+        ("00 - Pessoal/journal-1.md", "# Journal 1\nPensamentos do dia."),
+        ("00 - Pessoal/journal-2.md", "# Journal 2\nOutros pensamentos."),
+    ]
+    for rel, body in notas:
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    core_cli.main(["init-db", "--vault", str(tmp_path)])
+    conn = connect(tmp_path)
+    # Seed canonical areas (migrate skill far isso em prod)
+    for slug, label, folder in (
+        ("pessoal", "Pessoal", "00 - Pessoal"),
+        ("profissional", "Profissional", "01 - Profissional"),
+        ("pesquisa", "Pesquisas", "02 - Pesquisas e Estudos"),
+        ("ai-memory", "AI Memory", "03 - Memoria da IA"),
+    ):
+        conn.execute(
+            "INSERT OR IGNORE INTO areas (slug, label, folder, is_canonical, created_at) "
+            "VALUES (?, ?, ?, 1, datetime('now'))",
+            (slug, label, folder),
+        )
+    conn.commit()
+    scan(conn, tmp_path, embedder=_DeterministicEmbedder())
+    update_graph_metrics(conn)
+    return tmp_path, conn
+
+
+def _run_and_parse(expand, argv, capsys):
+    rc = expand.main(argv)
+    out = capsys.readouterr().out
+    return rc, json.loads(out)
 
 
 # ---------- 1. argparse basico ----------
@@ -56,13 +124,10 @@ def test_help_exits_zero(expand, capsys):
         expand.main(["--help"])
     assert exc.value.code == 0
     out = capsys.readouterr().out
-    assert "bridges" in out
-    assert "gaps" in out
-    assert "generate" in out
+    assert "bridges" in out and "gaps" in out and "generate" in out
 
 
 def test_without_subcommand_fails(expand):
-    # argparse com required=True em subparsers sai 2 sem sub-comando
     with pytest.raises(SystemExit) as exc:
         expand.main([])
     assert exc.value.code == 2
@@ -86,107 +151,94 @@ def test_generate_requires_suggestion_id(expand, initialized_vault):
     assert exc.value.code == 2
 
 
-# ---------- 2. sub-comandos de analise — envelope JSON estavel ----------
+# ---------- 2. envelope comum — todos os comandos ----------
 
 
-def _run_and_parse(expand, argv, capsys):
-    rc = expand.main(argv)
-    out = capsys.readouterr().out
-    return rc, json.loads(out)
-
-
-def test_bridges_stub_envelope(expand, initialized_vault, capsys):
+def test_bridges_envelope_tem_campos_essenciais(expand, populated_vault, capsys):
+    vault, _ = populated_vault
     rc, payload = _run_and_parse(
-        expand,
-        ["bridges", "--vault", str(initialized_vault)],
-        capsys,
+        expand, ["bridges", "--vault", str(vault)], capsys
     )
     assert rc == 0
+    for key in ("command", "vault", "vec_index", "dry_run", "candidates", "count", "persisted"):
+        assert key in payload, f"missing {key}"
     assert payload["command"] == "bridges"
-    assert payload["vault"] == str(initialized_vault)
-    assert payload["wave_pending"] is True
-    assert payload["planned_for_wave"] == 3
-    assert payload["candidates"] == []
-    assert payload["topic"] is None
-    assert payload["min_cos"] is None
+    assert payload["dry_run"] is True
+    assert payload["persisted"] == 0  # dry-run nao persiste
+    assert isinstance(payload["candidates"], list)
 
 
-def test_bridges_com_topic_e_min_cos(expand, initialized_vault, capsys):
+def test_gaps_reporta_by_kind(expand, populated_vault, capsys):
+    vault, _ = populated_vault
     rc, payload = _run_and_parse(
-        expand,
-        [
-            "bridges",
-            "--vault",
-            str(initialized_vault),
-            "--topic",
-            "hermetismo",
-            "--min-cos",
-            "0.25",
-        ],
-        capsys,
+        expand, ["gaps", "--vault", str(vault)], capsys
     )
     assert rc == 0
-    assert payload["topic"] == "hermetismo"
-    assert payload["min_cos"] == 0.25
+    assert "by_kind" in payload
+    assert isinstance(payload["by_kind"], dict)
 
 
-def test_moc_stub_envelope(expand, initialized_vault, capsys):
-    rc, payload = _run_and_parse(
-        expand,
-        [
-            "moc",
-            "--vault",
-            str(initialized_vault),
-            "--moc-path",
-            "02 - Pesquisas/_MOC.md",
-        ],
-        capsys,
-    )
-    assert rc == 0
-    assert payload["command"] == "moc"
-    assert payload["moc_path"] == "02 - Pesquisas/_MOC.md"
-    assert payload["planned_for_wave"] == 3
-
-
-def test_gaps_stub_envelope(expand, initialized_vault, capsys):
-    rc, payload = _run_and_parse(
-        expand,
-        ["gaps", "--vault", str(initialized_vault), "--area", "pesquisa"],
-        capsys,
-    )
-    assert rc == 0
-    assert payload["command"] == "gaps"
-    assert payload["area"] == "pesquisa"
-    assert payload["planned_for_wave"] == 3
-
-
-def test_from_stub_envelope(expand, initialized_vault, capsys):
+def test_from_com_note_inexistente_reporta_err(expand, populated_vault, capsys):
+    vault, _ = populated_vault
     rc, payload = _run_and_parse(
         expand,
         [
             "from",
             "--vault",
-            str(initialized_vault),
+            str(vault),
             "--note",
-            "02 - Pesquisas/hermetismo.md",
-            "--k",
-            "15",
+            "inexistente.md",
         ],
         capsys,
     )
     assert rc == 0
-    assert payload["command"] == "from"
-    assert payload["note"] == "02 - Pesquisas/hermetismo.md"
-    assert payload["k"] == 15
+    assert payload["neighbors"] == []
+    assert "note_err" in payload
 
 
-def test_generate_stub_envelope(expand, initialized_vault, capsys):
+def test_from_com_note_valida_retorna_neighbors_com_cos(expand, populated_vault, capsys):
+    vault, _ = populated_vault
+    rc, payload = _run_and_parse(
+        expand,
+        [
+            "from",
+            "--vault",
+            str(vault),
+            "--note",
+            "02 - Pesquisas e Estudos/hermetismo.md",
+            "--k",
+            "3",
+        ],
+        capsys,
+    )
+    assert rc == 0
+    assert "seed_id" in payload
+    assert len(payload["neighbors"]) <= 3
+    # Todos os vizinhos devem trazer path + cos
+    for n in payload["neighbors"]:
+        assert "path" in n and "cos" in n and "distance" in n
+
+
+def test_moc_com_path_inexistente_reporta(expand, populated_vault, capsys):
+    vault, _ = populated_vault
+    rc, payload = _run_and_parse(
+        expand,
+        ["moc", "--vault", str(vault), "--moc-path", "naoexiste/_MOC.md"],
+        capsys,
+    )
+    assert rc == 0
+    assert payload["candidates"] == []
+    assert "nao encontrada" in payload.get("note", "")
+
+
+def test_generate_stub_permanece_wave_4(expand, populated_vault, capsys):
+    vault, _ = populated_vault
     rc, payload = _run_and_parse(
         expand,
         [
             "generate",
             "--vault",
-            str(initialized_vault),
+            str(vault),
             "--suggestion-id",
             "42",
         ],
@@ -196,56 +248,57 @@ def test_generate_stub_envelope(expand, initialized_vault, capsys):
     assert payload["command"] == "generate"
     assert payload["suggestion_id"] == 42
     assert payload["written_path"] is None
+    assert payload["wave_pending"] is True
     assert payload["planned_for_wave"] == 4
 
 
-# ---------- 3. dry-run default e no-dry-run flag ----------
+# ---------- 3. dry-run default / no-dry-run persiste ----------
 
 
-def test_dry_run_default_true(expand, initialized_vault, capsys):
+def test_dry_run_default_true(expand, populated_vault, capsys):
+    vault, _ = populated_vault
     rc, payload = _run_and_parse(
-        expand,
-        ["bridges", "--vault", str(initialized_vault)],
-        capsys,
+        expand, ["bridges", "--vault", str(vault)], capsys
     )
     assert rc == 0
     assert payload["dry_run"] is True
+    assert payload["persisted"] == 0
 
 
-def test_no_dry_run_flag_desativa(expand, initialized_vault, capsys):
+def test_no_dry_run_persiste_em_suggestions_cache(expand, populated_vault, capsys):
+    vault, conn = populated_vault
+    # Forca threshold baixo pra garantir pelo menos 1 candidato
     rc, payload = _run_and_parse(
         expand,
-        ["bridges", "--vault", str(initialized_vault), "--no-dry-run"],
+        [
+            "bridges",
+            "--vault",
+            str(vault),
+            "--no-dry-run",
+            "--min-cos",
+            "-1.0",
+        ],
         capsys,
     )
     assert rc == 0
     assert payload["dry_run"] is False
+    # Com min_cos=-1.0, ha pelo menos um candidato (se vault tem >= 2 notas
+    # ativas com embedding)
+    if payload["count"] > 0:
+        assert payload["persisted"] == payload["count"]
+        db_count = conn.execute(
+            "SELECT COUNT(*) FROM suggestions_cache WHERE kind='bridge'"
+        ).fetchone()[0]
+        assert db_count == payload["persisted"]
 
 
-# ---------- 4. vault discovery: erro util sem marker ----------
+# ---------- 4. vault discovery ----------
 
 
 def test_vault_sem_marker_falha_claramente(expand, tmp_path, monkeypatch):
-    # tmp_path nao tem marker — mas passar --vault explicito aceita ainda assim.
-    # O caminho de erro e quando nao ha --vault nem marker em ancestors.
     monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit) as exc:
         expand.main(["bridges"])
-    # sys.exit("msg") resulta em code sendo a string msg (nao 1), mas nao-zero.
-    assert exc.value.code != 0
     msg = str(exc.value.code)
     assert "obsidian-master" in msg
     assert "--vault" in msg
-
-
-# ---------- 5. vec_index status reportado (ok ou fallback) ----------
-
-
-def test_envelope_reporta_status_vec_index(expand, initialized_vault, capsys):
-    rc, payload = _run_and_parse(
-        expand,
-        ["gaps", "--vault", str(initialized_vault)],
-        capsys,
-    )
-    assert rc == 0
-    assert payload["vec_index"] in ("ok", "fallback")

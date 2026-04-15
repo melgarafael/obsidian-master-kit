@@ -38,14 +38,32 @@ _REPO_ROOT = _SCRIPT.parent.parent.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+import importlib.util  # noqa: E402
+
 from core.db import connect  # noqa: E402
 from core.paths import resolve_vault  # noqa: E402
 
+_GAPS_PATH = pathlib.Path(__file__).parent / "gaps.py"
+_KNN_PATH = pathlib.Path(__file__).parent / "knn.py"
+
+
+def _load_by_path(module_name: str, file_path: pathlib.Path):
+    # Reusa se ja importado (evita reload entre sub-comandos) e registra em
+    # sys.modules ANTES do exec_module — dataclasses precisa resolver
+    # `cls.__module__` em sys.modules pra annotations funcionarem.
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        return existing
+    spec = importlib.util.spec_from_file_location(module_name, file_path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# Ainda stub; materializacao real em Wave 4.
 WAVE_PLAN = {
-    "bridges": 3,
-    "moc": 3,
-    "gaps": 3,
-    "from": 3,
     "generate": 4,
 }
 
@@ -55,54 +73,220 @@ def _emit(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
-def _shell_stub(cmd: str, args: argparse.Namespace, extra: dict[str, Any]) -> int:
-    """Esqueleto comum aos sub-comandos de analise enquanto a logica
-    esta em waves futuras. Valida vault + DB + abre conexao (garante que o
-    ambiente esta sao), imprime envelope JSON com marcador de wave
-    pendente, sai 0.
-    """
-    vault = resolve_vault(args.vault)
-    conn = connect(vault)
-    vec_status = "ok" if getattr(conn, "vec_loaded", False) else "fallback"
-    payload: dict[str, Any] = {
+def _base_payload(cmd: str, vault: pathlib.Path, conn, args: argparse.Namespace) -> dict[str, Any]:
+    return {
         "command": cmd,
         "vault": str(vault),
-        "vec_index": vec_status,
+        "vec_index": "ok" if getattr(conn, "vec_loaded", False) else "fallback",
         "dry_run": bool(getattr(args, "dry_run", True)),
-        "candidates": [],
-        "wave_pending": True,
-        "planned_for_wave": WAVE_PLAN[cmd],
-        "note": (
-            "Shell da Wave 1 (Epic 05 S01). Logica chega na "
-            f"Wave {WAVE_PLAN[cmd]}."
-        ),
     }
-    payload.update(extra)
-    _emit(payload)
-    return 0
+
+
+def _serialize_candidate(c) -> dict[str, Any]:
+    return {
+        "kind": c.kind,
+        "target_note_ids": list(c.target_note_ids),
+        "content": c.content,
+        "reasoning": c.reasoning,
+        "score": round(float(c.score), 4),
+    }
 
 
 # ---------- sub-comandos ----------
 
 
 def cmd_bridges(args: argparse.Namespace) -> int:
-    extra = {"topic": args.topic, "min_cos": args.min_cos}
-    return _shell_stub("bridges", args, extra)
+    vault = resolve_vault(args.vault)
+    conn = connect(vault)
+    gaps = _load_by_path("_expand_gaps", _GAPS_PATH)
+    candidates = gaps.detect_bridges(conn, min_cos=args.min_cos)
+    # Filtro de topico: mantem candidato se algum target tem a tag exata.
+    if args.topic:
+        candidates = _filter_by_topic(conn, candidates, args.topic)
+    persisted = 0
+    if not args.dry_run and candidates:
+        persisted = gaps.persist(conn, candidates)
+    payload = _base_payload("bridges", vault, conn, args)
+    payload.update(
+        {
+            "topic": args.topic,
+            "min_cos": args.min_cos,
+            "candidates": [_serialize_candidate(c) for c in candidates],
+            "count": len(candidates),
+            "persisted": persisted,
+        }
+    )
+    _emit(payload)
+    return 0
 
 
 def cmd_moc(args: argparse.Namespace) -> int:
-    extra = {"moc_path": args.moc_path}
-    return _shell_stub("moc", args, extra)
+    vault = resolve_vault(args.vault)
+    conn = connect(vault)
+    gaps = _load_by_path("_expand_gaps", _GAPS_PATH)
+    candidates = gaps.detect_moc_shallow(conn)
+    # Filtra pro MOC especificado via path relativo (match exato).
+    moc_path = args.moc_path
+    cursor = conn.execute("SELECT id FROM notes WHERE path = ?", (moc_path,))
+    row = cursor.fetchone()
+    target_id = row[0] if row else None
+    if target_id is None:
+        payload = _base_payload("moc", vault, conn, args)
+        payload.update(
+            {
+                "moc_path": moc_path,
+                "candidates": [],
+                "count": 0,
+                "persisted": 0,
+                "note": f"Nota MOC '{moc_path}' nao encontrada no vault.",
+            }
+        )
+        _emit(payload)
+        return 0
+    filtered = [c for c in candidates if target_id in c.target_note_ids]
+    persisted = 0
+    if not args.dry_run and filtered:
+        persisted = gaps.persist(conn, filtered)
+    payload = _base_payload("moc", vault, conn, args)
+    payload.update(
+        {
+            "moc_path": moc_path,
+            "candidates": [_serialize_candidate(c) for c in filtered],
+            "count": len(filtered),
+            "persisted": persisted,
+        }
+    )
+    _emit(payload)
+    return 0
 
 
 def cmd_gaps(args: argparse.Namespace) -> int:
-    extra = {"area": args.area}
-    return _shell_stub("gaps", args, extra)
+    vault = resolve_vault(args.vault)
+    conn = connect(vault)
+    gaps = _load_by_path("_expand_gaps", _GAPS_PATH)
+    candidates = gaps.run_all(conn)
+    if args.area:
+        candidates = _filter_by_area(conn, candidates, args.area)
+    persisted = 0
+    if not args.dry_run and candidates:
+        persisted = gaps.persist(conn, candidates)
+    payload = _base_payload("gaps", vault, conn, args)
+    payload.update(
+        {
+            "area": args.area,
+            "candidates": [_serialize_candidate(c) for c in candidates],
+            "count": len(candidates),
+            "persisted": persisted,
+            "by_kind": _count_by_kind(candidates),
+        }
+    )
+    _emit(payload)
+    return 0
 
 
 def cmd_from(args: argparse.Namespace) -> int:
-    extra = {"note": args.note, "k": args.k}
-    return _shell_stub("from", args, extra)
+    vault = resolve_vault(args.vault)
+    conn = connect(vault)
+    knn = _load_by_path("_expand_knn_cli", _KNN_PATH)
+    cursor = conn.execute("SELECT id FROM notes WHERE path = ?", (args.note,))
+    row = cursor.fetchone()
+    if row is None:
+        payload = _base_payload("from", vault, conn, args)
+        payload.update(
+            {
+                "note": args.note,
+                "k": args.k,
+                "neighbors": [],
+                "note_err": f"Nota '{args.note}' nao encontrada no vault.",
+            }
+        )
+        _emit(payload)
+        return 0
+    seed_id = row[0]
+    neighbors = knn.knn(conn, seed_id, k=args.k)
+    # Anota nome/path + converte distance -> cos pra leitura humana
+    enriched: list[dict[str, Any]] = []
+    for nid, dist in neighbors:
+        nrow = conn.execute(
+            "SELECT path, title FROM notes WHERE id = ?", (nid,)
+        ).fetchone()
+        if nrow is None:
+            continue
+        cos = max(-1.0, min(1.0, 1.0 - dist / 2.0))
+        enriched.append(
+            {
+                "id": nid,
+                "path": nrow[0],
+                "title": nrow[1],
+                "distance": round(float(dist), 4),
+                "cos": round(float(cos), 4),
+            }
+        )
+    payload = _base_payload("from", vault, conn, args)
+    payload.update(
+        {
+            "note": args.note,
+            "seed_id": seed_id,
+            "k": args.k,
+            "neighbors": enriched,
+            "count": len(enriched),
+        }
+    )
+    _emit(payload)
+    return 0
+
+
+# ---------- filtro helpers ----------
+
+
+def _filter_by_topic(conn, candidates, topic: str):
+    """Mantem candidato se algum target tem tag cujo path contem `topic`."""
+    topic_low = topic.lower()
+    kept = []
+    for c in candidates:
+        placeholders = ",".join("?" * len(c.target_note_ids))
+        rows = conn.execute(
+            f"""
+            SELECT DISTINCT t.tag
+            FROM note_tags nt
+            JOIN tags t ON t.id = nt.tag_id
+            WHERE nt.note_id IN ({placeholders})
+            """,
+            c.target_note_ids,
+        ).fetchall()
+        tags_low = {r[0].lower() for r in rows}
+        if any(topic_low in t for t in tags_low):
+            kept.append(c)
+    return kept
+
+
+def _filter_by_area(conn, candidates, area_name: str):
+    """Mantem candidato cujos targets ESTAO TODOS na area."""
+    row = conn.execute(
+        "SELECT id FROM areas WHERE LOWER(name) = ?", (area_name.lower(),)
+    ).fetchone()
+    if row is None:
+        return []
+    area_id = row[0]
+    kept = []
+    for c in candidates:
+        if not c.target_note_ids:
+            continue
+        placeholders = ",".join("?" * len(c.target_note_ids))
+        rows = conn.execute(
+            f"SELECT area_id FROM notes WHERE id IN ({placeholders})",
+            c.target_note_ids,
+        ).fetchall()
+        if all(r[0] == area_id for r in rows):
+            kept.append(c)
+    return kept
+
+
+def _count_by_kind(candidates) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for c in candidates:
+        counts[c.kind] = counts.get(c.kind, 0) + 1
+    return counts
 
 
 def cmd_generate(args: argparse.Namespace) -> int:
