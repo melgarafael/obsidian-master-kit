@@ -192,6 +192,35 @@ def cmd_status(args) -> int:
     return 0
 
 
+def cmd_upgrade(args) -> int:
+    """Delega pro script skills/obsidian-librarian/scripts/upgrade.py.
+
+    Motivo: upgrade.py e stdlib-only e nao depende do package core
+    (via importlib.util isolation). Chamar via subprocess preserva esse
+    invariante (e evita arrastar deps pesadas de core/__init__.py pra
+    dentro da CLI). Output do script (JSON) passa por stdout cru.
+    """
+    import subprocess
+
+    # Caminho do script e estavel no repo: skills/obsidian-librarian/scripts/upgrade.py.
+    # O pacote instala via pyproject como dados (nao como package importavel),
+    # entao resolvemos via path relativo ao __file__ da CLI.
+    script = (
+        pathlib.Path(__file__).resolve().parents[1]
+        / "skills" / "obsidian-librarian" / "scripts" / "upgrade.py"
+    )
+    if not script.exists():
+        print(
+            f"Erro: script upgrade.py nao encontrado em {script}. Reinstale o kit.",
+            file=sys.stderr,
+        )
+        return 1
+    cmd = [sys.executable, str(script)]
+    if args.vault:
+        cmd += ["--vault", str(pathlib.Path(args.vault).expanduser().resolve())]
+    return subprocess.call(cmd)
+
+
 def cmd_version(args) -> int:
     kit_ver = _pkg_ver()
     # schema_version exige DB; se nao acharmos vault, so imprime kit version.
@@ -281,6 +310,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_st.add_argument("--vault", help="Raiz do vault (default: auto-discovery)")
     p_st.set_defaults(func=cmd_status)
+
+    p_up = sub.add_parser(
+        "upgrade",
+        help="Upgrade de vault v0.1.1 pra v1.0 (cria DB, popula, bumpa marker).",
+        description=(
+            "Migra um vault instalado com kit v0.1.1 pra v1.0: cria o DB "
+            "SQLite, roda scan completo, emite eventos iniciais e bumpa o "
+            "marker.json. Preserva CLAUDE.md e conteudo de notas. "
+            "Idempotente — rodar 2x nao duplica events."
+        ),
+    )
+    p_up.add_argument("--vault", help="Raiz do vault (default: auto-discovery)")
+    p_up.set_defaults(func=cmd_upgrade)
 
     p_ve = sub.add_parser(
         "version",
