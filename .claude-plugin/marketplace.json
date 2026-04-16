@@ -9,8 +9,8 @@
   "plugins": [
     {
       "name": "obsidian-master-kit",
-      "description": "Scaffolda um vault Obsidian completo via entrevista pt-br e mantem curadoria automatica (valida frontmatter, normaliza tags, atualiza _INDEX.md vivo). Inclui 2 skills (obsidian-init, obsidian-librarian), 2 slash commands e hook PostToolUse.",
-      "version": "0.1.0",
+      "description": "Kit completo de second brain: scaffold guiado, curadoria contínua, migração não-destrutiva, organizer com clusters/duplicatas, expand com geração LLM restrita ao vault, e pulse (dashboard localhost com ML — FSRS, recommendations, anomaly detection, privacy-first). 6 skills integradas, 3 slash commands, hook PostToolUse, 100% local.",
+      "version": "1.0.0",
       "author": {
         "name": "Rafael Melgaco"
       },

@@ -1,7 +1,7 @@
 {
   "name": "obsidian-master-kit",
-  "version": "0.1.0-mvp",
-  "description": "Kit de skills que transforma uma pasta vazia num vault Obsidian profissional — segundo cérebro + memória persistente para IA. Inclui bootstrap guiado em pt-br, bibliotecário que cura cada escrita no vault e roadmap de skills futuras.",
+  "version": "1.0.0",
+  "description": "Kit completo de skills pra transformar uma pasta em vault Obsidian profissional + dashboard local com ML. 6 skills: init (scaffold), librarian (cura contínua), migrate (adoção não-destrutiva), organizer (clusters/duplicatas), expand (notas-ponte via LLM restrito), pulse (dashboard localhost com FSRS, recommendations, anomalies). 100% local, privacy-first, pt-br.",
   "author": {
     "name": "Rafael Melgaco",
     "email": "rafael@maudibrasil.com.br",
