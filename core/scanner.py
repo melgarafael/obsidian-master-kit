@@ -38,6 +38,7 @@ _FIXED_IGNORE_DIRS = frozenset({
     ".obsidian",
     ".trash",
     ".obsidian-master",
+    ".claude",
     "_templates",
     "node_modules",
     ".git",
