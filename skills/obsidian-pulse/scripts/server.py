@@ -226,11 +226,172 @@ def build_app(
         finally:
             conn.close()
 
+    def _execute_action(conn, suggestion_id: int) -> dict:
+        """Executa acao real no vault baseada no tipo da sugestao."""
+        import datetime as _dt
+        from pathlib import Path as _P
+
+        row = conn.execute(
+            "SELECT kind, target_note_ids, content FROM suggestions_cache WHERE id=?",
+            (suggestion_id,),
+        ).fetchone()
+        if not row:
+            return {"action": "not_found"}
+
+        kind, target_json, content = row
+        target_ids = json.loads(target_json) if target_json else []
+
+        if kind == "moc_missing":
+            return _create_moc(conn, vault, target_ids)
+        elif kind == "bridge":
+            return _add_bridge(conn, vault, target_ids)
+        elif kind == "reference_missing":
+            return _create_reference(conn, vault, target_ids)
+        else:
+            return {"action": "marked_only", "kind": kind}
+
+    def _create_moc(conn, vault_path, target_ids: list) -> dict:
+        """Cria _MOC.md na pasta comum das notas do cluster."""
+        import datetime as _dt
+        from pathlib import Path as _P
+        import os
+
+        if not target_ids:
+            return {"action": "no_targets"}
+
+        ph = ",".join("?" * len(target_ids))
+        rows = conn.execute(
+            f"SELECT id, path, title FROM notes WHERE id IN ({ph})", target_ids
+        ).fetchall()
+        if not rows:
+            return {"action": "no_notes_found"}
+
+        paths = [_P(r[1]) for r in rows]
+        try:
+            common = _P(os.path.commonpath([str(p.parent) for p in paths]))
+        except ValueError:
+            common = paths[0].parent
+
+        moc_path = vault_path / common / "_MOC.md"
+        if moc_path.exists():
+            existing = moc_path.read_text(encoding="utf-8")
+            added = 0
+            for _, _, title in rows:
+                stem = title or "(sem titulo)"
+                link = f"- [[{stem}]]"
+                if link not in existing:
+                    existing = existing.rstrip() + f"\n{link}\n"
+                    added += 1
+            if added:
+                moc_path.write_text(existing, encoding="utf-8")
+            return {"action": "moc_updated", "path": str(common / "_MOC.md"), "added": added}
+
+        today = _dt.date.today().isoformat()
+        lines = [
+            "---", f"created: {today}", f"updated: {today}",
+            "type: moc", "status: draft",
+            "generated_by: obsidian-pulse", "tags: [generated]",
+            "---", "",
+            f"# MOC — {common.name}", "",
+            f"> Gerado pelo obsidian-pulse. {len(rows)} notas agrupadas por similaridade semantica.", "",
+            "## Notas", "",
+        ]
+        for _, path, title in sorted(rows, key=lambda r: (r[2] or "").lower()):
+            stem = _P(path).stem
+            lines.append(f"- [[{stem}]]")
+        lines.extend(["", "## Relacionado", ""])
+
+        moc_path.parent.mkdir(parents=True, exist_ok=True)
+        moc_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return {"action": "moc_created", "path": str(common / "_MOC.md"), "notes_linked": len(rows)}
+
+    def _add_bridge(conn, vault_path, target_ids: list) -> dict:
+        """Adiciona wiki-link bidirecional entre 2 notas."""
+        from pathlib import Path as _P
+
+        if len(target_ids) < 2:
+            return {"action": "insufficient_targets"}
+
+        rows = conn.execute(
+            "SELECT id, path, title FROM notes WHERE id IN (?, ?)",
+            (target_ids[0], target_ids[1]),
+        ).fetchall()
+        if len(rows) < 2:
+            return {"action": "notes_not_found"}
+
+        by_id = {r[0]: (r[1], r[2]) for r in rows}
+        path_a, title_a = by_id[target_ids[0]]
+        path_b, title_b = by_id[target_ids[1]]
+        stem_a, stem_b = _P(path_a).stem, _P(path_b).stem
+
+        def _append_link(fpath, link_stem):
+            fp = vault_path / fpath
+            if not fp.exists():
+                return False
+            text = fp.read_text(encoding="utf-8")
+            link_line = f"- [[{link_stem}]]"
+            if link_line in text:
+                return False
+            if "## Relacionado" in text:
+                text = text.replace("## Relacionado\n", f"## Relacionado\n{link_line}\n", 1)
+            else:
+                text = text.rstrip() + f"\n\n## Relacionado\n\n{link_line}\n"
+            fp.write_text(text, encoding="utf-8")
+            return True
+
+        linked_a = _append_link(path_a, stem_b)
+        linked_b = _append_link(path_b, stem_a)
+        return {
+            "action": "bridge_linked",
+            "note_a": stem_a, "linked_a": linked_a,
+            "note_b": stem_b, "linked_b": linked_b,
+        }
+
+    def _create_reference(conn, vault_path, target_ids: list) -> dict:
+        """Cria nota de referencia central linkando cluster."""
+        import datetime as _dt
+        from pathlib import Path as _P
+
+        if not target_ids:
+            return {"action": "no_targets"}
+
+        ph = ",".join("?" * len(target_ids))
+        rows = conn.execute(
+            f"SELECT id, path, title FROM notes WHERE id IN ({ph})", target_ids
+        ).fetchall()
+        if not rows:
+            return {"action": "no_notes_found"}
+
+        first_path = _P(rows[0][1])
+        ref_dir = vault_path / first_path.parent
+        titles = [r[2] or _P(r[1]).stem for r in rows]
+        slug = titles[0][:40].replace("/", "-").replace(" ", "-").lower()
+        ref_path = ref_dir / f"_ref-{slug}.md"
+
+        today = _dt.date.today().isoformat()
+        lines = [
+            "---", f"created: {today}", f"updated: {today}",
+            "type: referencia", "status: draft",
+            "generated_by: obsidian-pulse", "tags: [generated, referencia]",
+            "---", "",
+            f"# Referencia — {titles[0]}", "",
+            f"> Nota central gerada pelo pulse. {len(rows)} notas relacionadas por similaridade.", "",
+            "## Notas relacionadas", "",
+        ]
+        for _, path, title in rows:
+            lines.append(f"- [[{_P(path).stem}]]")
+        lines.extend(["", "## Contexto", "", "_(Adicione aqui o que conecta essas notas.)_", ""])
+
+        ref_path.parent.mkdir(parents=True, exist_ok=True)
+        ref_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return {"action": "reference_created", "path": str(ref_path.relative_to(vault_path)), "notes_linked": len(rows)}
+
     @app.post("/api/accept/{suggestion_id}")
     async def api_accept(suggestion_id: int):
         import datetime as _dt
         conn = connect(vault)
         try:
+            result = _execute_action(conn, suggestion_id)
             conn.execute(
                 "UPDATE suggestions_cache SET acted_on = 1 WHERE id = ?",
                 (suggestion_id,),
@@ -242,7 +403,7 @@ def build_app(
                 (now, now[:10]),
             )
             conn.commit()
-            return {"ok": True, "suggestion_id": suggestion_id}
+            return {"ok": True, "suggestion_id": suggestion_id, "result": result}
         finally:
             conn.close()
 
