@@ -436,6 +436,98 @@ async function bootstrap() {
     await renderApp(handle);
   });
 }
+/* ========= Modal progresso ========= */
+function abrirModal() { $('modal-bg').classList.add('ativo'); }
+function fecharModal() { $('modal-bg').classList.remove('ativo'); }
+
+async function salvarProgresso() {
+  const tipo = $('modal-tipo').value;
+  const qtd = parseInt($('modal-qtd').value, 10) || 1;
+  const nota = $('modal-nota').value.trim();
+  const agora = new Date();
+  const hh = String(agora.getHours()).padStart(2, '0');
+  const mm = String(agora.getMinutes()).padStart(2, '0');
+  const data = agora.toISOString().slice(0, 10);
+
+  const area = window._area;
+  const progDir = await area.getDirectoryHandle('progresso', { create: true });
+  const filename = `${data}.md`;
+  let text = await readText(progDir, filename);
+  if (!text) text = `---\ntipo: progresso\ndata: ${data}\neventos: 0\n---\n\n`;
+  const { meta, body } = parseFrontmatter(text);
+  const det = [];
+  if (tipo === 'cliente_fechado') det.push(`valor: R$ ${qtd}`);
+  if (tipo === 'alcance_manual') det.push(`quantidade: ${qtd}`);
+  if (nota) det.push(`nota: ${nota}`);
+  const sufx = det.length ? ` (${det.join(', ')})` : '';
+  const linha = `- ${hh}:${mm} — ${tipo}${sufx}`;
+  meta.eventos = (meta.eventos || 0) + 1;
+  const novoBody = (body || '').trim() + '\n' + linha + '\n';
+  await writeText(progDir, filename, serializeFrontmatter(meta, novoBody));
+
+  await recomputarMetas();
+  fecharModal();
+  await renderApp(window._vault);
+}
+
+async function recomputarMetas() {
+  const area = window._area;
+  const metasText = await readText(area, '_metas.md');
+  if (!metasText) return;
+  const { meta, body } = parseFrontmatter(metasText);
+  const progDir = await area.getDirectoryHandle('progresso', { create: true });
+  const eventos = [];
+  for await (const [name, h] of progDir.entries()) {
+    if (h.kind !== 'file' || !name.match(/^\d{4}-\d{2}-\d{2}\.md$/)) continue;
+    const { body: b } = parseFrontmatter(await readText(progDir, name));
+    for (const linha of (b || '').split('\n')) {
+      const m = linha.match(/^- \d{2}:\d{2} — (\w+)(?:\s*\((.*)\))?/);
+      if (m) eventos.push({ tipo: m[1], detalhes: m[2] });
+    }
+  }
+  const ag = agregarProgresso(eventos);
+  if (Array.isArray(meta.funil)) {
+    for (const e of meta.funil) { e.atual = ag[e.etapa] ?? 0; }
+  }
+  let valorTotal = 0;
+  for (const ev of eventos) {
+    if (ev.tipo === 'cliente_fechado') {
+      const m = (ev.detalhes || '').match(/valor:\s*R?\$?\s*(\d+(?:\.\d+)?)/);
+      valorTotal += m ? parseFloat(m[1]) : (meta.funil?.find(x => x.etapa === 'clientes')?.valor_unitario || 0);
+    }
+  }
+  if (meta.objetivo) meta.objetivo.valor_atual = valorTotal;
+  await writeText(area, '_metas.md', serializeFrontmatter(meta, body));
+}
+
+$('btn-registrar').addEventListener('click', abrirModal);
+$('modal-cancelar').addEventListener('click', fecharModal);
+$('modal-salvar').addEventListener('click', salvarProgresso);
+$('modal-bg').addEventListener('click', (e) => { if (e.target.id === 'modal-bg') fecharModal(); });
+
+/* ========= Checkbox acoes ========= */
+document.addEventListener('click', async (e) => {
+  if (!e.target.classList.contains('check')) return;
+  const slug = e.target.dataset.slug;
+  if (!slug) return;
+  const area = window._area;
+  const acoesDir = await area.getDirectoryHandle('acoes');
+  let filename = null;
+  for await (const [name] of acoesDir.entries()) {
+    if (name.includes(slug)) { filename = name; break; }
+  }
+  if (!filename) return;
+  const { meta, body } = parseFrontmatter(await readText(acoesDir, filename));
+  const novoBody = (body || '').replace(/- \[ \]/, '- [x]');
+  if (novoBody === body) return;
+  meta.tarefas_feitas = (meta.tarefas_feitas || 0) + 1;
+  if (meta.tarefas_feitas >= meta.tarefas_totais) meta.status = 'concluido';
+  else if (meta.status === 'pendente') meta.status = 'em_andamento';
+  meta.atualizado = new Date().toISOString().slice(0, 19);
+  await writeText(acoesDir, filename, serializeFrontmatter(meta, novoBody));
+  await renderApp(window._vault);
+});
+
 bootstrap();
   </script>
 </body>
