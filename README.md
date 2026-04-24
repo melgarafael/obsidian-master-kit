@@ -21,6 +21,10 @@ artificial que organiza tudo pra você sozinho, pra sempre.
 - Um arquivo de **doutrina** (`CLAUDE.md`) que explica pra qualquer IA que for usar
   seu Obsidian depois: "as regras da casa são essas aqui". Qualquer skill
   respeita automaticamente.
+- **Forge** (v1.1): um módulo de execução de negócio. Conduz entrevista dos
+  3 Ps + matemática do resultado + 7 ações macro, e abre um painel ao vivo em
+  `localhost:4712` onde você registra progresso com um clique e vê a agulha
+  se mover. Tudo local, sem nuvem.
 
 Tudo em português. Você não precisa saber nada sobre Obsidian pra começar.
 
@@ -73,24 +77,13 @@ Digite `/` no Claude Code e veja se aparecem na lista:
 
 - `/obsidian-master-kit:init`
 - `/obsidian-master-kit:sync`
+- `/obsidian-master-kit:forge-plan`
+- `/obsidian-master-kit:forge-scan`
+- `/obsidian-master-kit:forge-dash`
 
-Se aparecerem, **tá instalado**. Pula pro próximo bloco.
+Se os 5 aparecerem, **tá instalado**. Pula pro próximo bloco.
 
 Se **não apareceram**, vai pra seção [Problemas comuns](#problemas-comuns).
-
----
-
-### Novo na v1.1 — `forge` (execução de negócio)
-
-3 sub-comandos que transformam seu vault num sistema operacional de negócio:
-
-- `/obsidian-master-kit:forge-plan` — entrevista dos 4 passos (3 Ps, precificação, matemática, 7 ações macro). Gera `04 - Negocio/_plano.md`, `_metas.md`, 7 `acoes/*.md`.
-- `/obsidian-master-kit:forge-scan` — varre pastas informadas, cria notas atômicas por projeto em `04 - Negocio/contexto/`.
-- `/obsidian-master-kit:forge-dash` — abre painel em `localhost:4712` (Chrome/Arc/Edge). Barras de progresso do funil, 7 ações, botão "+ registrar progresso".
-
-Baseado na metodologia "IA como ferramenta" — resolve dor específica, cobra pelo resultado.
-
-Guia rápido: `docs/forge-quickstart.md`.
 
 ---
 
@@ -141,7 +134,7 @@ Boa-vinda ao seu segundo cérebro.
 
 ## Como seu vault está organizado
 
-Seu Obsidian agora tem 4 grandes áreas:
+Seu Obsidian tem 4 grandes áreas de partida:
 
 | Pasta | Pra que serve |
 |---|---|
@@ -150,12 +143,78 @@ Seu Obsidian agora tem 4 grandes áreas:
 | **02 - Pesquisas e Estudos** | Onde vai tudo que você (ou a IA) pesquisa e estuda. |
 | **03 - Memoria da IA** | Contexto pra quando você está construindo software com IA. |
 
-E dois arquivos especiais na raiz:
+E, opcionalmente, uma 5ª área criada pelo **forge**:
+
+| Pasta | Pra que serve |
+|---|---|
+| **04 - Negocio** | Plano de negócio + metas + progresso + scanner de projetos ativos. Criada quando você roda `/obsidian-master-kit:forge-plan` pela primeira vez. |
+
+Dois arquivos especiais na raiz:
 
 - **CLAUDE.md** — as regras da casa. **Você edita quando quer.** Qualquer IA que
   for mexer no seu Obsidian lê ele primeiro.
 - **_INDEX.md** — o índice vivo. **Não edite à mão** — é o bibliotecário que mantém
   atualizado sozinho.
+
+---
+
+## Forge — executando um negócio de dentro do vault
+
+Depois que seu segundo cérebro está de pé, o **forge** te ajuda a transformá-lo num
+sistema de execução. É baseado na metodologia "IA é ferramenta, não produto" —
+você usa IA pra resolver dor específica de mercado real e cobra pelo resultado.
+
+Três comandos, um loop:
+
+### 1. Monte seu plano (`forge-plan`)
+
+```
+/obsidian-master-kit:forge-plan
+```
+
+O Claude Code te conduz por ~15 min de entrevista em 4 passos:
+
+1. **3 Ps** — Produto (o que você oferece), Problema (a dor que resolve), Pessoa (quem paga).
+2. **Precificação** — valor unitário + as 4 bases de valor (resultado potencial, tempo economizado, esforço reduzido, produção aumentada).
+3. **Matemática do Resultado** — objetivo em R$ → quantos clientes → quantas reuniões → quantos leads → quanto alcance. O forge valida a aritmética e recusa números que não batem.
+4. **7 Ações Macro** — segundo cérebro, plano, captação via conteúdo, captação/venda, script de reunião, processo de entrega, admin financeiro. Arquivos criados automaticamente.
+
+### 2. Mapeie seus projetos ativos (`forge-scan`)
+
+```
+/obsidian-master-kit:forge-scan
+```
+
+Primeira vez ele te pergunta quais pastas vigiar. Depois, varre git repos ativos
+(commit recente ou arquivo mexido na última semana), detecta a stack (Python, Node,
+Rust, Go), e escreve uma nota atômica por projeto em `04 - Negocio/contexto/`. O
+resultado vira contexto que qualquer IA local pode consultar.
+
+### 3. Abra o painel vivo (`forge-dash`)
+
+```
+/obsidian-master-kit:forge-dash
+```
+
+Sobe um dashboard em `http://localhost:4712` (Chrome/Arc/Edge/Brave). Clica
+"Escolher meu vault Obsidian" uma vez e pronto — ele lê seu vault direto via
+File System Access API. Cinco seções:
+
+- **Os 3 Ps** (pra você relembrar o norte)
+- **Matemática do resultado** — barras de progresso por etapa do funil
+- **Ações macro** — checkbox pra cada uma das 7 tarefas pendentes; clicar marca no arquivo
+- **Próximo passo sugerido** — determinístico (primeira tarefa pendente da ação mais prioritária)
+- **Contexto vivo** — projetos ativos detectados pelo scanner
+
+Botão **+ registrar progresso** abre um modal: escolhe tipo (lead captado, reunião
+realizada, cliente fechado, conteúdo publicado, alcance manual), quantidade,
+opcionalmente uma nota. Grava em `progresso/YYYY-MM-DD.md`, recomputa `_metas.md`
+e as barras sobem ao vivo.
+
+Tudo local. Zero nuvem. Zero processo em background. O dashboard é um HTML
+estático; o vault é a única fonte da verdade.
+
+**Guia rápido completo:** [`docs/forge-quickstart.md`](docs/forge-quickstart.md).
 
 ---
 
@@ -281,14 +340,28 @@ descrevendo:
 
 ---
 
-## O que vem depois deste MVP
+## Skills disponíveis hoje
 
-O kit vai crescer com mais skills — diário automático, busca semântica, arquivador
+Resumo do que está entregue no kit agora:
+
+| Skill | Pra que |
+|---|---|
+| `obsidian-init` | Scaffold do vault (4 áreas + templates + CLAUDE.md) |
+| `obsidian-librarian` | Curador contínuo (roda via hook em cada escrita) |
+| `obsidian-migrate` | Adoção não-destrutiva sobre vault existente |
+| `obsidian-organizer` | Clusters + duplicatas |
+| `obsidian-expand` | Notas-ponte via LLM restrito |
+| **`obsidian-forge`** (v1.1) | **Plano de negócio + scanner de projetos + dashboard executor** |
+
+## O que vem depois
+
+O kit vai continuar crescendo — diário automático, busca semântica, arquivador
 de notas antigas, auditor do grafo. A lista completa está em
 [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 Se você é desenvolvedor e quer entender como o kit funciona por dentro, tem
-documentação técnica em [`docs/DEV.md`](docs/DEV.md).
+documentação técnica em [`docs/DEV.md`](docs/DEV.md). Pra integrar com o forge
+especificamente, veja [`docs/forge-quickstart.md`](docs/forge-quickstart.md).
 
 ---
 
