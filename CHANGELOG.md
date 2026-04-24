@@ -5,6 +5,21 @@ Todas as mudanças relevantes deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/)
 e o versionamento segue [SemVer](https://semver.org/lang/pt-BR/).
 
+## [1.1.0] - 2026-04-24
+
+### Added
+- `obsidian-forge` skill com 3 sub-comandos:
+  - `forge-plan`: entrevista dos 4 passos (3 Ps, precificação, matemática, 7 ações macro)
+  - `forge-scan`: detecção de projetos ativos com git + mtime → notas atômicas
+  - `forge-dash`: HTML estático + File System Access API em localhost:4712
+- Área `04 - Negocio` criada lazily pelo forge (init não precisou mudar — zero interativo).
+- Nova dep: `pyyaml>=6.0`. Playwright em dev opcional.
+- 37 testes novos (frontmatter 6, math 6, scan 11, plan_state 4, templates 3, dash_refresh 2, librarian_protected 4, integration 1).
+
+### Changed
+- `obsidian-librarian` honra `frontmatter.protected: true` (não edita notas marcadas).
+- CLAUDE.md do vault template ganhou bloco explicando área 04.
+
 ## [Unreleased]
 
 ## [1.0.0] — 2026-04-15
