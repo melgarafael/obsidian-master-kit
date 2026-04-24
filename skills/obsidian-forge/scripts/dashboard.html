@@ -84,10 +84,359 @@
     </div>
   </div>
 
-  <script>/* preenchido na proxima task */
-    document.getElementById('btn-escolher-vault').addEventListener('click', () => {
-      alert('FS Access ainda nao ativo. Proxima task implementa.');
-    });
+  <script>
+/* ========= Config ========= */
+const AREA = '04 - Negocio';
+const DB_NAME = 'forge-vault';
+const DB_KEY = 'dirHandle';
+
+/* ========= IndexedDB ========= */
+function openDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore('store');
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function saveHandle(h) {
+  const db = await openDb();
+  const tx = db.transaction('store', 'readwrite');
+  tx.objectStore('store').put(h, DB_KEY);
+  return new Promise((r) => tx.oncomplete = r);
+}
+async function loadHandle() {
+  const db = await openDb();
+  const tx = db.transaction('store', 'readonly');
+  return new Promise((resolve) => {
+    const r = tx.objectStore('store').get(DB_KEY);
+    r.onsuccess = () => resolve(r.result || null);
+  });
+}
+
+/* ========= FS Access ========= */
+async function pickVault() {
+  const handle = await window.showDirectoryPicker({ id: 'forge-vault', mode: 'readwrite' });
+  await saveHandle(handle);
+  return handle;
+}
+async function ensurePermission(handle) {
+  const o = { mode: 'readwrite' };
+  if ((await handle.queryPermission(o)) === 'granted') return true;
+  return (await handle.requestPermission(o)) === 'granted';
+}
+async function getArea(vault) { return vault.getDirectoryHandle(AREA); }
+async function readText(dir, name) {
+  try {
+    const fh = await dir.getFileHandle(name);
+    const f = await fh.getFile();
+    return await f.text();
+  } catch { return null; }
+}
+async function writeText(dir, name, text) {
+  const fh = await dir.getFileHandle(name, { create: true });
+  const w = await fh.createWritable();
+  await w.write(text);
+  await w.close();
+}
+
+/* ========= Frontmatter parse/serialize ========= */
+function parseFrontmatter(text) {
+  const m = (text || '').match(/^---\s*\n([\s\S]*?)^---\s*\n?([\s\S]*)$/m);
+  if (!m) return { meta: {}, body: text || '' };
+  try { return { meta: parseYaml(m[1]), body: m[2] }; }
+  catch { return { meta: {}, body: text || '' }; }
+}
+
+function parseYaml(raw) {
+  const lines = raw.split('\n').filter(l => l.trim() !== '' && !l.trim().startsWith('#'));
+  const root = {};
+  const stack = [{ indent: -1, obj: root, lastKey: null }];
+  for (const line of lines) {
+    const indent = line.length - line.trimStart().length;
+    const trimmed = line.trim();
+    while (stack[stack.length - 1].indent >= indent) stack.pop();
+    const top = stack[stack.length - 1];
+    if (trimmed.startsWith('- ')) {
+      const rest = trimmed.slice(2);
+      if (rest.includes(':') && !rest.startsWith('"')) {
+        const [k, ...v] = rest.split(':');
+        const obj = { [k.trim()]: coerce(v.join(':').trim()) };
+        if (!Array.isArray(top.obj[top.lastKey])) top.obj[top.lastKey] = [];
+        top.obj[top.lastKey].push(obj);
+        stack.push({ indent, obj, lastKey: k.trim() });
+      } else {
+        if (!Array.isArray(top.obj[top.lastKey])) top.obj[top.lastKey] = [];
+        top.obj[top.lastKey].push(coerce(rest));
+      }
+    } else {
+      const colon = trimmed.indexOf(':');
+      const k = trimmed.slice(0, colon).trim();
+      const v = trimmed.slice(colon + 1).trim();
+      top.lastKey = k;
+      if (v === '') {
+        top.obj[k] = {};
+        stack.push({ indent, obj: top.obj[k], lastKey: null });
+      } else {
+        top.obj[k] = coerce(v);
+      }
+    }
+  }
+  return root;
+}
+
+function coerce(v) {
+  if (v === '' || v == null) return null;
+  if (v === 'true') return true;
+  if (v === 'false') return false;
+  if (/^-?\d+$/.test(v)) return parseInt(v, 10);
+  if (/^-?\d+\.\d+$/.test(v)) return parseFloat(v);
+  if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) return v.slice(1, -1);
+  return v;
+}
+
+function serializeFrontmatter(meta, body) {
+  return `---\n${dumpYaml(meta)}---\n\n${(body || '').trimStart()}`;
+}
+function dumpYaml(obj, indent = 0) {
+  const pad = '  '.repeat(indent);
+  let out = '';
+  for (const k of Object.keys(obj)) {
+    const v = obj[k];
+    if (Array.isArray(v)) {
+      out += `${pad}${k}:\n`;
+      for (const item of v) {
+        if (typeof item === 'object' && item !== null) {
+          const ks = Object.keys(item);
+          out += `${pad}  - ${ks[0]}: ${fmtScalar(item[ks[0]])}\n`;
+          for (let i = 1; i < ks.length; i++) out += `${pad}    ${ks[i]}: ${fmtScalar(item[ks[i]])}\n`;
+        } else {
+          out += `${pad}  - ${fmtScalar(item)}\n`;
+        }
+      }
+    } else if (typeof v === 'object' && v !== null) {
+      out += `${pad}${k}:\n${dumpYaml(v, indent + 1)}`;
+    } else {
+      out += `${pad}${k}: ${fmtScalar(v)}\n`;
+    }
+  }
+  return out;
+}
+function fmtScalar(v) {
+  if (v == null) return '';
+  if (typeof v === 'string' && /[:#\[\]{},]/.test(v)) return `"${v.replace(/"/g, '\\"')}"`;
+  return String(v);
+}
+
+/* ========= Render (DOM seguro) ========= */
+const $ = (id) => document.getElementById(id);
+
+function makeDiv(cls, text) {
+  const d = document.createElement('div');
+  if (cls) d.className = cls;
+  if (text != null) d.textContent = text;
+  return d;
+}
+function makeSpan(cls, text) {
+  const s = document.createElement('span');
+  if (cls) s.className = cls;
+  if (text != null) s.textContent = text;
+  return s;
+}
+function appendLabelValue(parent, label, value) {
+  const row = makeDiv();
+  row.appendChild(makeSpan(null, label + ': '));
+  const strong = document.createElement('strong');
+  strong.textContent = value || '—';
+  row.appendChild(strong);
+  parent.appendChild(row);
+}
+
+function render3Ps(el, d) {
+  el.replaceChildren();
+  const p = d.plano.meta;
+  if (!p.produto) {
+    const em = document.createElement('em');
+    em.textContent = 'Rode `forge plan` pra definir.';
+    el.appendChild(em);
+    return;
+  }
+  appendLabelValue(el, 'Produto', p.produto);
+  appendLabelValue(el, 'Problema', p.problema);
+  appendLabelValue(el, 'Pessoa', p.pessoa);
+}
+
+function renderMetas(el, d) {
+  el.replaceChildren();
+  const m = d.metas.meta;
+  if (!m.funil) {
+    const em = document.createElement('em');
+    em.textContent = 'Sem metas definidas.';
+    el.appendChild(em);
+    return;
+  }
+  const ag = agregarProgresso(d.progressoEventos);
+  for (const e of m.funil) {
+    const atual = ag[e.etapa] ?? 0;
+    const alvo = e.alvo || 0;
+    const pct = Math.min(100, (atual / Math.max(alvo, 1)) * 100);
+    const row = makeDiv('barra');
+    row.appendChild(makeSpan(null, e.etapa));
+    const trilho = makeDiv('trilho');
+    const pre = makeDiv('preenchido');
+    pre.style.width = pct + '%';
+    trilho.appendChild(pre);
+    row.appendChild(trilho);
+    row.appendChild(makeSpan(null, `${atual}/${alvo}`));
+    el.appendChild(row);
+  }
+}
+
+function renderAcoes(el, d) {
+  el.replaceChildren();
+  for (const a of d.acoes) {
+    const row = makeDiv('acao');
+    const check = makeSpan('check' + (a.meta.status === 'concluido' ? ' ok' : ''),
+                           a.meta.status === 'concluido' ? '✓' : '☐');
+    check.dataset.slug = a.meta.slug || '';
+    row.appendChild(check);
+    row.appendChild(makeSpan('titulo', `${a.meta.ordem}. ${a.meta.titulo || ''}`));
+    row.appendChild(makeSpan('progresso', `${a.meta.tarefas_feitas || 0}/${a.meta.tarefas_totais || 0}`));
+    el.appendChild(row);
+  }
+}
+
+function renderProximoPasso(el, d) {
+  el.replaceChildren();
+  const row = makeDiv();
+  for (const a of d.acoes) {
+    if (a.meta.status === 'em_andamento') {
+      const m = (a.body || '').match(/- \[ \] (.+)/);
+      if (m) {
+        const strong = document.createElement('strong');
+        strong.textContent = (a.meta.titulo || '') + ': ';
+        row.appendChild(strong);
+        row.appendChild(document.createTextNode(m[1]));
+        el.appendChild(row);
+        return;
+      }
+    }
+  }
+  for (const a of d.acoes) {
+    if (a.meta.status === 'pendente') {
+      const m = (a.body || '').match(/- \[ \] (.+)/);
+      if (m) {
+        const strong = document.createElement('strong');
+        strong.textContent = (a.meta.titulo || '') + ': ';
+        row.appendChild(strong);
+        row.appendChild(document.createTextNode(m[1]));
+        el.appendChild(row);
+        return;
+      }
+    }
+  }
+  row.textContent = 'Todos os marcos feitos. Inicie novo ciclo.';
+  el.appendChild(row);
+}
+
+function renderContexto(el, d) {
+  el.replaceChildren();
+  const n = d.contexto.meta.projetos_ativos || 0;
+  el.appendChild(makeDiv(null, `${n} projetos ativos detectados.`));
+  const pequeno = makeDiv();
+  pequeno.style.color = 'var(--text-dim)';
+  pequeno.style.fontSize = '13px';
+  pequeno.style.marginTop = '8px';
+  const primeirasLinhas = (d.contexto.body || '').split('\n').slice(0, 10);
+  for (const linha of primeirasLinhas) {
+    const p = document.createElement('div');
+    p.textContent = linha;
+    pequeno.appendChild(p);
+  }
+  el.appendChild(pequeno);
+}
+
+function statusLinha(d) {
+  const ciclo = d.plano.meta.ciclo || '—';
+  const vAtual = d.metas.meta.objetivo?.valor_atual ?? 0;
+  const vAlvo = d.metas.meta.objetivo?.valor_alvo ?? 0;
+  return `Ciclo ${ciclo} · R$ ${vAtual} / R$ ${vAlvo}`;
+}
+
+function agregarProgresso(eventos) {
+  const c = { clientes: 0, reunioes: 0, leads: 0, alcance: 0 };
+  for (const ev of eventos) {
+    if (ev.tipo === 'cliente_fechado') c.clientes++;
+    else if (ev.tipo === 'reuniao_realizada') c.reunioes++;
+    else if (ev.tipo === 'lead_captado') c.leads++;
+    else if (ev.tipo === 'conteudo_publicado') c.alcance++;
+    else if (ev.tipo === 'alcance_manual') {
+      const m = (ev.detalhes || '').match(/(\d+)/);
+      c.alcance += m ? parseInt(m[1], 10) : 0;
+    }
+  }
+  return c;
+}
+
+/* ========= Carga + boot ========= */
+async function carregarDados(area) {
+  const plano = parseFrontmatter(await readText(area, '_plano.md') || '');
+  const metas = parseFrontmatter(await readText(area, '_metas.md') || '');
+  const contexto = parseFrontmatter(await readText(area, '_contexto.md') || '');
+
+  const acoesDir = await area.getDirectoryHandle('acoes').catch(() => null);
+  const acoes = [];
+  if (acoesDir) {
+    for await (const [name, h] of acoesDir.entries()) {
+      if (h.kind !== 'file' || !name.match(/^\d{2}-.+\.md$/)) continue;
+      const { meta, body } = parseFrontmatter(await readText(acoesDir, name));
+      acoes.push({ filename: name, meta, body });
+    }
+    acoes.sort((a, b) => a.filename.localeCompare(b.filename));
+  }
+
+  const progressoDir = await area.getDirectoryHandle('progresso').catch(() => null);
+  const progressoEventos = [];
+  if (progressoDir) {
+    for await (const [name, h] of progressoDir.entries()) {
+      if (h.kind !== 'file' || !name.match(/^\d{4}-\d{2}-\d{2}\.md$/)) continue;
+      const { body } = parseFrontmatter(await readText(progressoDir, name));
+      for (const linha of (body || '').split('\n')) {
+        const m = linha.match(/^- \d{2}:\d{2} — (\w+)(?:\s*\((.*)\))?/);
+        if (m) progressoEventos.push({ tipo: m[1], detalhes: m[2] });
+      }
+    }
+  }
+
+  return { plano, metas, contexto, acoes, progressoEventos };
+}
+
+async function renderApp(vault) {
+  $('onboarding').style.display = 'none';
+  $('app').style.display = 'block';
+  const area = await getArea(vault);
+  const dados = await carregarDados(area);
+  $('status-linha').textContent = statusLinha(dados);
+  render3Ps($('conteudo-3ps'), dados);
+  renderMetas($('conteudo-metas'), dados);
+  renderAcoes($('conteudo-acoes'), dados);
+  renderProximoPasso($('conteudo-next'), dados);
+  renderContexto($('conteudo-contexto'), dados);
+  window._vault = vault;
+  window._area = area;
+}
+
+async function bootstrap() {
+  let handle = await loadHandle();
+  if (handle && await ensurePermission(handle)) {
+    await renderApp(handle);
+  }
+  $('btn-escolher-vault').addEventListener('click', async () => {
+    handle = await pickVault();
+    await renderApp(handle);
+  });
+}
+bootstrap();
   </script>
 </body>
 </html>
