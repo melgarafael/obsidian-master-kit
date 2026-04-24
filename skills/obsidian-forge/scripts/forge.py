@@ -160,6 +160,60 @@ def cmd_plan_save_acoes(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_dash(args: argparse.Namespace) -> int:
+    import http.server
+    import socketserver
+    import threading
+    import webbrowser
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    vault = Path(args.vault).resolve() if args.vault else _detectar_vault()
+    scripts_dir = Path(__file__).parent
+
+    if args.refresh:
+        from dash_refresh import recomputar
+        recomputar(vault_root=vault)
+        print("OK _metas.md recalculado.")
+        return 0
+
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, directory=str(scripts_dir), **kw)
+        def log_message(self, *a, **kw):
+            if args.verbose:
+                super().log_message(*a, **kw)
+        def do_POST(self):
+            if self.path == '/scan':
+                try:
+                    from scan_context import scan
+                    result = scan(vault_root=vault, silent=True, quick=True)
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(json.dumps(result).encode())
+                except Exception as e:
+                    self.send_error(500, str(e))
+            else:
+                self.send_error(404)
+
+    class LocalOnly(socketserver.TCPServer):
+        allow_reuse_address = True
+
+    port = args.port
+    with LocalOnly(('127.0.0.1', port), Handler) as srv:
+        url = f'http://127.0.0.1:{port}/dashboard.html'
+        print(f'forge dash · {url}')
+        print(f'  vault: {vault}')
+        print('  Ctrl-C pra parar.')
+        if not args.no_browser:
+            threading.Timer(0.5, lambda: webbrowser.open(url)).start()
+        try:
+            srv.serve_forever()
+        except KeyboardInterrupt:
+            print('\nparando.')
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="forge")
     p.add_argument("--vault")
@@ -183,6 +237,13 @@ def build_parser() -> argparse.ArgumentParser:
         if nome != "plan-save-acoes":
             sp.add_argument("--respostas", required=True)
         sp.set_defaults(func=fn)
+
+    pd = sub.add_parser("dash")
+    pd.add_argument("--port", type=int, default=4712)
+    pd.add_argument("--no-browser", action="store_true")
+    pd.add_argument("--refresh", action="store_true")
+    pd.add_argument("--verbose", action="store_true")
+    pd.set_defaults(func=cmd_dash)
 
     return p
 
