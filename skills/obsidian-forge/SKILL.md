@@ -52,3 +52,42 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/obsidian-forge/scripts/forge.py \
 8. **Dashboard requer Chromium** pra edicao. Outros browsers: read-only.
 9. **Dashboard usa DOM APIs seguras**: sem `.innerHTML` com conteudo de
    arquivo; tudo via `createElement` + `textContent` + `replaceChildren`.
+
+## Fluxo da entrevista `forge-plan` (Claude Code conduz no chat)
+
+### Passo 1+2 — 3 Ps + Precificacao
+
+1. Ler `_contexto.md` (se existir) pra personalizar.
+2. Perguntar: Produto (1 frase), Problema, Pessoa.
+3. Perguntar prosa estendida de cada um.
+4. Perguntar valor unitario + 4 bases de precificacao.
+5. Montar JSON e chamar:
+
+```bash
+python3 forge.py plan-save-plano --respostas /tmp/respostas-plano.json
+```
+
+### Passo 3 — Matematica
+
+1. Perguntar: objetivo (titulo, valor_alvo, prazo), taxas de conversao, fonte de alcance.
+2. Chamar `math_funil.derivar_funil` via script para obter funil calculado.
+3. Mostrar funil ao user; se aprovado → chamar:
+
+```bash
+python3 forge.py plan-save-metas --respostas /tmp/respostas-metas.json
+```
+
+Se `validar_funil` retornar erro, Claude re-pergunta o que nao bate.
+
+### Passo 4 — Acoes Macro
+
+```bash
+python3 forge.py plan-save-acoes
+```
+
+Cria os 7 arquivos. Claude pode depois ler cada um e sugerir personalizacoes.
+
+### Estado parcial
+
+`04 - Negocio/.forge-state.json` guarda `passo_atual` e respostas. Ao
+re-executar, Claude le esse arquivo pra saber onde parou e retomar.
