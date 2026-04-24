@@ -1,5 +1,15 @@
 # Roadmap — `obsidian-master-kit`
 
+## Skills entregues
+
+### v1.0 (2026-04-21)
+- `obsidian-init`, `obsidian-librarian`, `obsidian-expand`, `obsidian-organizer`, `obsidian-migrate`, `obsidian-pulse`
+
+### v1.1 (2026-04-24)
+- `obsidian-forge` — plano de negócio + scanner de contexto + dashboard executor (3 sub-comandos)
+
+---
+
 Este documento lista as skills previstas para versões futuras. O MVP (v0.1.0-mvp)
 entrega apenas `obsidian-init` e `obsidian-librarian`. As skills abaixo são aditivas:
 cada uma depende do bibliotecário já existir, mas não altera sua superfície.
