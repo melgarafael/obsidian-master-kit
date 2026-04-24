@@ -125,7 +125,9 @@ async function ensurePermission(handle) {
   if ((await handle.queryPermission(o)) === 'granted') return true;
   return (await handle.requestPermission(o)) === 'granted';
 }
-async function getArea(vault) { return vault.getDirectoryHandle(AREA); }
+async function getArea(vault) {
+  return vault.getDirectoryHandle(AREA, { create: true });
+}
 async function readText(dir, name) {
   try {
     const fh = await dir.getFileHandle(name);
@@ -379,28 +381,43 @@ function agregarProgresso(eventos) {
 }
 
 /* ========= Carga + boot ========= */
+async function listFiles(dir, regex) {
+  const items = [];
+  for await (const [name, h] of dir.entries()) {
+    if (h.kind === 'file' && regex.test(name)) items.push(name);
+  }
+  return items;
+}
+
 async function carregarDados(area) {
-  const plano = parseFrontmatter(await readText(area, '_plano.md') || '');
-  const metas = parseFrontmatter(await readText(area, '_metas.md') || '');
-  const contexto = parseFrontmatter(await readText(area, '_contexto.md') || '');
+  const [planoText, metasText, contextoText] = await Promise.all([
+    readText(area, '_plano.md'),
+    readText(area, '_metas.md'),
+    readText(area, '_contexto.md'),
+  ]);
+  const plano = parseFrontmatter(planoText || '');
+  const metas = parseFrontmatter(metasText || '');
+  const contexto = parseFrontmatter(contextoText || '');
 
   const acoesDir = await area.getDirectoryHandle('acoes').catch(() => null);
-  const acoes = [];
+  let acoes = [];
   if (acoesDir) {
-    for await (const [name, h] of acoesDir.entries()) {
-      if (h.kind !== 'file' || !name.match(/^\d{2}-.+\.md$/)) continue;
-      const { meta, body } = parseFrontmatter(await readText(acoesDir, name));
-      acoes.push({ filename: name, meta, body });
-    }
+    const nomes = await listFiles(acoesDir, /^\d{2}-.+\.md$/);
+    const lidos = await Promise.all(nomes.map(n => readText(acoesDir, n)));
+    acoes = nomes.map((n, i) => {
+      const { meta, body } = parseFrontmatter(lidos[i] || '');
+      return { filename: n, meta, body };
+    });
     acoes.sort((a, b) => a.filename.localeCompare(b.filename));
   }
 
   const progressoDir = await area.getDirectoryHandle('progresso').catch(() => null);
   const progressoEventos = [];
   if (progressoDir) {
-    for await (const [name, h] of progressoDir.entries()) {
-      if (h.kind !== 'file' || !name.match(/^\d{4}-\d{2}-\d{2}\.md$/)) continue;
-      const { body } = parseFrontmatter(await readText(progressoDir, name));
+    const nomes = await listFiles(progressoDir, /^\d{4}-\d{2}-\d{2}\.md$/);
+    const lidos = await Promise.all(nomes.map(n => readText(progressoDir, n)));
+    for (const text of lidos) {
+      const { body } = parseFrontmatter(text || '');
       for (const linha of (body || '').split('\n')) {
         const m = linha.match(/^- \d{2}:\d{2} — (\w+)(?:\s*\((.*)\))?/);
         if (m) progressoEventos.push({ tipo: m[1], detalhes: m[2] });
@@ -411,19 +428,76 @@ async function carregarDados(area) {
   return { plano, metas, contexto, acoes, progressoEventos };
 }
 
+function mostrarErro(msg, detalhe) {
+  $('status-linha').textContent = 'erro';
+  const root = $('app');
+  // Remove cards existentes (mantém o header)
+  const header = root.querySelector('header.topo');
+  root.replaceChildren();
+  if (header) root.appendChild(header);
+
+  const bloco = document.createElement('section');
+  bloco.className = 'card';
+  const h = document.createElement('h2');
+  h.textContent = 'Não consegui carregar o painel';
+  bloco.appendChild(h);
+  const p = document.createElement('p');
+  p.style.color = 'var(--text-dim)';
+  p.style.marginBottom = '18px';
+  p.textContent = msg;
+  bloco.appendChild(p);
+  if (detalhe) {
+    const det = document.createElement('pre');
+    det.style.color = 'var(--text-faint)';
+    det.style.fontSize = '12px';
+    det.style.marginBottom = '18px';
+    det.style.whiteSpace = 'pre-wrap';
+    det.textContent = detalhe;
+    bloco.appendChild(det);
+  }
+  const acoes = makeDiv();
+  acoes.style.display = 'flex';
+  acoes.style.gap = '12px';
+  const btnOutro = document.createElement('button');
+  btnOutro.textContent = 'Escolher outra pasta';
+  btnOutro.addEventListener('click', async () => {
+    try {
+      const h = await pickVault();
+      await renderApp(h);
+    } catch (e) { console.error(e); }
+  });
+  acoes.appendChild(btnOutro);
+  const btnReload = document.createElement('button');
+  btnReload.textContent = 'Recarregar';
+  btnReload.addEventListener('click', () => location.reload());
+  acoes.appendChild(btnReload);
+  bloco.appendChild(acoes);
+  root.appendChild(bloco);
+}
+
 async function renderApp(vault) {
   $('onboarding').style.display = 'none';
   $('app').style.display = 'block';
-  const area = await getArea(vault);
-  const dados = await carregarDados(area);
-  $('status-linha').textContent = statusLinha(dados);
-  render3Ps($('conteudo-3ps'), dados);
-  renderMetas($('conteudo-metas'), dados);
-  renderAcoes($('conteudo-acoes'), dados);
-  renderProximoPasso($('conteudo-next'), dados);
-  renderContexto($('conteudo-contexto'), dados);
-  window._vault = vault;
-  window._area = area;
+  $('status-linha').textContent = 'carregando...';
+  try {
+    const area = await getArea(vault);
+    window._vault = vault;
+    window._area = area;
+    const dados = await carregarDados(area);
+    window._dados = dados;
+    $('status-linha').textContent = statusLinha(dados);
+    render3Ps($('conteudo-3ps'), dados);
+    renderMetas($('conteudo-metas'), dados);
+    renderAcoes($('conteudo-acoes'), dados);
+    renderProximoPasso($('conteudo-next'), dados);
+    renderContexto($('conteudo-contexto'), dados);
+  } catch (err) {
+    console.error('[forge] renderApp falhou:', err);
+    const msg = err.name === 'NotAllowedError'
+      ? 'Sem permissão de acesso ao vault. Clique "Escolher outra pasta" e conceda leitura+escrita.'
+      : 'Erro ao ler o vault. Veja detalhes abaixo e tente recarregar ou escolher outra pasta.';
+    mostrarErro(msg, err.name + ': ' + err.message);
+  }
 }
 
 async function bootstrap() {
@@ -432,8 +506,12 @@ async function bootstrap() {
     await renderApp(handle);
   }
   $('btn-escolher-vault').addEventListener('click', async () => {
-    handle = await pickVault();
-    await renderApp(handle);
+    try {
+      handle = await pickVault();
+      await renderApp(handle);
+    } catch (e) {
+      if (e.name !== 'AbortError') console.error(e);
+    }
   });
 }
 /* ========= Modal progresso ========= */
@@ -441,6 +519,12 @@ function abrirModal() { $('modal-bg').classList.add('ativo'); }
 function fecharModal() { $('modal-bg').classList.remove('ativo'); }
 
 async function salvarProgresso() {
+  const area = window._area;
+  if (!area) {
+    alert('Vault ainda não carregado. Escolha a pasta do vault antes de registrar progresso.');
+    fecharModal();
+    return;
+  }
   const tipo = $('modal-tipo').value;
   const qtd = parseInt($('modal-qtd').value, 10) || 1;
   const nota = $('modal-nota').value.trim();
@@ -449,7 +533,7 @@ async function salvarProgresso() {
   const mm = String(agora.getMinutes()).padStart(2, '0');
   const data = agora.toISOString().slice(0, 10);
 
-  const area = window._area;
+  try {
   const progDir = await area.getDirectoryHandle('progresso', { create: true });
   const filename = `${data}.md`;
   let text = await readText(progDir, filename);
@@ -468,10 +552,15 @@ async function salvarProgresso() {
   await recomputarMetas();
   fecharModal();
   await renderApp(window._vault);
+  } catch (err) {
+    console.error('[forge] salvarProgresso falhou:', err);
+    alert('Não consegui salvar o progresso: ' + (err.message || err.name));
+  }
 }
 
 async function recomputarMetas() {
   const area = window._area;
+  if (!area) return;
   const metasText = await readText(area, '_metas.md');
   if (!metasText) return;
   const { meta, body } = parseFrontmatter(metasText);
@@ -511,6 +600,8 @@ document.addEventListener('click', async (e) => {
   const slug = e.target.dataset.slug;
   if (!slug) return;
   const area = window._area;
+  if (!area) return;
+  try {
   const acoesDir = await area.getDirectoryHandle('acoes');
   let filename = null;
   for await (const [name] of acoesDir.entries()) {
@@ -526,6 +617,9 @@ document.addEventListener('click', async (e) => {
   meta.atualizado = new Date().toISOString().slice(0, 19);
   await writeText(acoesDir, filename, serializeFrontmatter(meta, novoBody));
   await renderApp(window._vault);
+  } catch (err) {
+    console.error('[forge] checkbox handler falhou:', err);
+  }
 });
 
 bootstrap();
