@@ -176,3 +176,13 @@ O `_INDEX.md` contém: contagem por área, últimas 10 notas adicionadas, lista 
 ativos, notas órfãs (sem links).
 
 Para forçar uma atualização manual: `/obsidian-master-kit:sync`.
+
+## Area `04 - Negocio` (forge)
+
+Territorio do modulo `obsidian-forge` (v1.1+ do kit).
+
+- `_plano.md` e `_metas.md` tem `protected: true` — so o forge escreve.
+- `acoes/*.md` pode ser editado livremente; `tarefas_feitas/totais` sao
+  gerenciados pelo dashboard.
+- `progresso/YYYY-MM-DD.md` e append-only (nunca editar historico).
+- `contexto/*.md` e regenerado pelo scanner — edicao manual sera sobrescrita.
