@@ -917,6 +917,9 @@ def main(argv: list[str] | None = None) -> int:
 
     fixes_summary = Counter()
     for rec in records:
+        # protected: true — indexar apenas, nunca modificar o arquivo.
+        if rec.frontmatter.get("protected") is True:
+            continue
         changes = autofix_record(rec, today)
         for k, v in changes.items():
             if isinstance(v, bool) and v:
@@ -953,6 +956,9 @@ def main(argv: list[str] | None = None) -> int:
     }
 
     for rec in records:
+        # protected: true — indexar apenas, nao reportar issues.
+        if rec.frontmatter.get("protected") is True:
+            continue
         if rec.issues:
             report["invalid_frontmatter"].append(
                 {"file": str(rec.rel), "errors": rec.issues}
