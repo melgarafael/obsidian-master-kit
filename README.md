@@ -80,6 +80,20 @@ Se **não apareceram**, vai pra seção [Problemas comuns](#problemas-comuns).
 
 ---
 
+### Novo na v1.1 — `forge` (execução de negócio)
+
+3 sub-comandos que transformam seu vault num sistema operacional de negócio:
+
+- `/obsidian-master-kit:forge-plan` — entrevista dos 4 passos (3 Ps, precificação, matemática, 7 ações macro). Gera `04 - Negocio/_plano.md`, `_metas.md`, 7 `acoes/*.md`.
+- `/obsidian-master-kit:forge-scan` — varre pastas informadas, cria notas atômicas por projeto em `04 - Negocio/contexto/`.
+- `/obsidian-master-kit:forge-dash` — abre painel em `localhost:4712` (Chrome/Arc/Edge). Barras de progresso do funil, 7 ações, botão "+ registrar progresso".
+
+Baseado na metodologia "IA como ferramenta" — resolve dor específica, cobra pelo resultado.
+
+Guia rápido: `docs/forge-quickstart.md`.
+
+---
+
 ## Primeiro uso — criando seu segundo cérebro
 
 ### 1. Escolha onde seu Obsidian vai morar
