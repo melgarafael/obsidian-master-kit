@@ -1,0 +1,4 @@
+[project]
+name = "repo-ativo-python"
+version = "0.1.0"
+description = "Repo fake Python para teste do scanner."
