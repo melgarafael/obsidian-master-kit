@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>forge · painel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #13110f; --bg-elev: #1a1815; --bg-card: #181613;
+    --text: #eae3d2; --text-dim: #9a9186; --text-faint: #6a6359;
+    --accent: #d4a24c; --accent-dim: #8a6c34;
+    --border: #2a2620; --ok: #8fb174;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); color: var(--text); font-family: 'Inter', system-ui, sans-serif; font-size: 15px; line-height: 1.55; }
+  button { font: inherit; color: var(--accent); background: none; border: 1px solid var(--accent-dim); padding: 8px 14px; border-radius: 3px; cursor: pointer; }
+  button:hover { background: var(--accent); color: var(--bg); }
+  .container { max-width: 900px; margin: 0 auto; padding: 48px 32px; }
+  header.topo { padding-bottom: 32px; border-bottom: 1px solid var(--border); margin-bottom: 48px; }
+  .brand { font-family: 'Newsreader', serif; font-style: italic; font-size: 42px; letter-spacing: -0.02em; }
+  .brand::after { content: '.'; color: var(--accent); }
+  .status-linha { color: var(--text-dim); font-size: 14px; margin-top: 6px; }
+  section.card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; padding: 28px; margin-bottom: 24px; }
+  section.card h2 { font-family: 'Newsreader', serif; font-weight: 500; font-size: 22px; margin-bottom: 18px; }
+  .onboarding { text-align: center; padding: 80px 32px; }
+  .onboarding h1 { font-family: 'Newsreader', serif; font-style: italic; font-size: 56px; margin-bottom: 12px; }
+  .onboarding h1::after { content: '.'; color: var(--accent); }
+  .onboarding p { color: var(--text-dim); margin-bottom: 32px; max-width: 480px; margin-left: auto; margin-right: auto; }
+  .barra { display: flex; align-items: center; gap: 14px; margin: 10px 0; font-size: 14px; }
+  .barra .trilho { flex: 1; height: 8px; background: var(--bg-elev); border-radius: 4px; overflow: hidden; }
+  .barra .preenchido { height: 100%; background: var(--accent); }
+  .acao { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .acao:last-child { border-bottom: 0; }
+  .acao .check { font-size: 18px; color: var(--text-faint); cursor: pointer; user-select: none; }
+  .acao .check.ok { color: var(--ok); }
+  .acao .titulo { flex: 1; }
+  .acao .progresso { color: var(--text-dim); font-size: 13px; font-feature-settings: 'tnum'; }
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.7); display: none; align-items: center; justify-content: center; }
+  .modal-bg.ativo { display: flex; }
+  .modal { background: var(--bg-elev); border: 1px solid var(--border); border-radius: 6px; padding: 32px; min-width: 400px; max-width: 560px; }
+  .modal h3 { font-family: 'Newsreader', serif; margin-bottom: 18px; }
+  .modal label { display: block; margin-bottom: 12px; color: var(--text-dim); font-size: 13px; }
+  .modal input, .modal select { width: 100%; padding: 8px 10px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 3px; font: inherit; margin-top: 4px; }
+  .modal .botoes { display: flex; gap: 12px; justify-content: flex-end; margin-top: 22px; }
+  strong { font-weight: 600; color: var(--text); }
+  em { color: var(--text-dim); }
+</style>
+</head>
+<body>
+  <div id="onboarding" class="onboarding">
+    <h1>forge</h1>
+    <p>Painel de execucao de negocio. Le seu vault Obsidian localmente. Zero nuvem.</p>
+    <button id="btn-escolher-vault">Escolher meu vault Obsidian</button>
+  </div>
+
+  <div id="app" class="container" style="display:none">
+    <header class="topo">
+      <div class="brand">forge</div>
+      <div class="status-linha" id="status-linha">carregando...</div>
+    </header>
+    <section class="card" id="s-3ps"><h2>Os 3 Ps</h2><div id="conteudo-3ps"></div></section>
+    <section class="card" id="s-metas"><h2>Matematica do resultado</h2><div id="conteudo-metas"></div><button id="btn-registrar">+ registrar progresso</button></section>
+    <section class="card" id="s-acoes"><h2>Acoes macro</h2><div id="conteudo-acoes"></div></section>
+    <section class="card" id="s-next"><h2>Proximo passo sugerido</h2><div id="conteudo-next"></div></section>
+    <section class="card" id="s-contexto"><h2>Contexto vivo</h2><div id="conteudo-contexto"></div></section>
+  </div>
+
+  <div class="modal-bg" id="modal-bg">
+    <div class="modal">
+      <h3>Registrar progresso</h3>
+      <label>Tipo<select id="modal-tipo">
+        <option value="lead_captado">Lead captado</option>
+        <option value="reuniao_realizada">Reuniao realizada</option>
+        <option value="cliente_fechado">Cliente fechado</option>
+        <option value="conteudo_publicado">Conteudo publicado</option>
+        <option value="alcance_manual">Alcance manual</option>
+      </select></label>
+      <label>Quantidade / valor (opcional)<input type="number" id="modal-qtd" value="1" /></label>
+      <label>Nota (opcional)<input type="text" id="modal-nota" /></label>
+      <div class="botoes"><button id="modal-cancelar">Cancelar</button><button id="modal-salvar">Salvar</button></div>
+    </div>
+  </div>
+
+  <script>/* preenchido na proxima task */
+    document.getElementById('btn-escolher-vault').addEventListener('click', () => {
+      alert('FS Access ainda nao ativo. Proxima task implementa.');
+    });
+  </script>
+</body>
+</html>
