@@ -72,3 +72,39 @@ def test_readme_resumo() -> None:
 
 def test_readme_ausente(tmp_path: Path) -> None:
     assert ler_readme_resumo(tmp_path) is None
+
+
+from scan_context import gerar_nota_atomica, gerar_contexto_agregado  # noqa: E402
+
+
+def test_gerar_nota_atomica(tmp_path: Path, fixture_atualizar_mtime: None) -> None:
+    vault = tmp_path / "vault"
+    (vault / "04 - Negocio" / "contexto").mkdir(parents=True)
+    gerar_nota_atomica(vault_root=vault, repo_info={
+        "nome": "repo-ativo-python",
+        "caminho": str(FIX / "repo-ativo-python"),
+    })
+    nota = vault / "04 - Negocio" / "contexto" / "repo-ativo-python.md"
+    assert nota.exists()
+    from frontmatter import read_frontmatter
+    meta, body = read_frontmatter(nota)
+    assert meta["tipo"] == "contexto_projeto"
+    assert meta["nome"] == "repo-ativo-python"
+    assert "python" in meta["stack"]
+    assert "repo-ativo-python" in body
+
+
+def test_gerar_contexto_agregado(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    (vault / "04 - Negocio" / "contexto").mkdir(parents=True)
+    gerar_contexto_agregado(
+        vault_root=vault,
+        repos=[{"nome": "a", "caminho": "/x/a"}, {"nome": "b", "caminho": "/x/b"}],
+        fontes=[{"tipo": "pasta", "caminho": "/x", "ultima_varredura": "2026-04-22T14:00"}],
+    )
+    nota = vault / "04 - Negocio" / "_contexto.md"
+    assert nota.exists()
+    from frontmatter import read_frontmatter
+    meta, body = read_frontmatter(nota)
+    assert meta["projetos_ativos"] == 2
+    assert "a" in body and "b" in body
