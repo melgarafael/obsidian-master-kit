@@ -114,7 +114,7 @@ def ler_readme_resumo(repo_path: Path, max_chars: int = 500) -> str | None:
 
 import sys  # noqa: E402
 sys.path.insert(0, str(Path(__file__).parent))
-from frontmatter import write_frontmatter  # noqa: E402
+from frontmatter import write_frontmatter, read_frontmatter  # noqa: E402
 
 
 def _ultimo_commit_detalhes(repo_path: Path) -> tuple[str, str, str] | None:
@@ -195,3 +195,55 @@ def gerar_contexto_agregado(*, vault_root: Path, repos: list[dict], fontes: list
     alvo.parent.mkdir(parents=True, exist_ok=True)
     write_frontmatter(alvo, meta, body)
     return alvo
+
+
+def init_config(*, vault_root: Path, pastas: list[str]) -> Path:
+    meta = {
+        "tipo": "config_scan",
+        "pastas_observadas": pastas,
+        "janela_ativo_dias": 30,
+        "limite_profundidade": 3,
+        "hook_sessionstart_ativo": False,
+        "timeout_hook_s": 5,
+        "ignore": ["node_modules", ".venv", "__pycache__", "dist", "build", ".next", "target"],
+    }
+    body = "# Config do scanner\n\nEdite `pastas_observadas`.\n"
+    alvo = vault_root / "04 - Negocio" / "_config-scan.md"
+    alvo.parent.mkdir(parents=True, exist_ok=True)
+    write_frontmatter(alvo, meta, body)
+    return alvo
+
+
+def _ler_config(vault_root: Path) -> dict[str, Any] | None:
+    cfg = vault_root / "04 - Negocio" / "_config-scan.md"
+    if not cfg.exists():
+        return None
+    meta, _ = read_frontmatter(cfg)
+    return meta
+
+
+def scan(*, vault_root: Path, silent: bool = False, quick: bool = False) -> dict[str, Any]:
+    config = _ler_config(vault_root)
+    if config is None:
+        raise FileNotFoundError(
+            f"_config-scan.md ausente em {vault_root}. Rode `forge scan --init`."
+        )
+    pastas = [Path(p).expanduser() for p in config.get("pastas_observadas", [])]
+    repos = detectar_repos(
+        pastas=pastas,
+        janela_ativo_dias=int(config.get("janela_ativo_dias", 30)),
+        limite_profundidade=int(config.get("limite_profundidade", 3)),
+        ignore=list(config.get("ignore", [])),
+    )
+    for r in repos:
+        gerar_nota_atomica(vault_root=vault_root, repo_info=r)
+    fontes = [{"tipo": "pasta", "caminho": str(p),
+               "ultima_varredura": datetime.now().isoformat(timespec="seconds")}
+              for p in pastas]
+    gerar_contexto_agregado(vault_root=vault_root, repos=repos, fontes=fontes)
+    resumo = {"projetos_ativos": len(repos), "repos": [r["nome"] for r in repos]}
+    if not silent:
+        print(f"[forge-scan] {len(repos)} projetos ativos.")
+        for r in repos:
+            print(f"  · {r['nome']}  ({r['caminho']})")
+    return resumo

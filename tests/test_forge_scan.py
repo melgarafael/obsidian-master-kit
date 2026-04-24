@@ -108,3 +108,26 @@ def test_gerar_contexto_agregado(tmp_path: Path) -> None:
     meta, body = read_frontmatter(nota)
     assert meta["projetos_ativos"] == 2
     assert "a" in body and "b" in body
+
+
+from scan_context import scan, init_config  # noqa: E402
+
+
+def test_scan_end_to_end(tmp_path: Path, fixture_atualizar_mtime: None) -> None:
+    vault = tmp_path / "vault"
+    (vault / "04 - Negocio").mkdir(parents=True)
+    init_config(vault_root=vault, pastas=[str(FIX)])
+    result = scan(vault_root=vault, silent=True)
+    assert result["projetos_ativos"] >= 2
+    assert (vault / "04 - Negocio" / "_contexto.md").exists()
+
+
+def test_init_config_grava(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    (vault / "04 - Negocio").mkdir(parents=True)
+    init_config(vault_root=vault, pastas=["/a", "/b"])
+    cfg = vault / "04 - Negocio" / "_config-scan.md"
+    from frontmatter import read_frontmatter
+    meta, _ = read_frontmatter(cfg)
+    assert meta["pastas_observadas"] == ["/a", "/b"]
+    assert meta["janela_ativo_dias"] == 30
